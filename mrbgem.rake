@@ -2,6 +2,7 @@ MRuby::Gem::Specification.new('mruby-fast-json') do |spec|
   spec.license = 'Apache-2'
   spec.author  = 'Hendrik Beskow'
   spec.summary = 'simdjson for mruby'
+  spec.add_dependency 'mruby-bigint'
 
   simdjson_src = File.expand_path("#{spec.dir}/deps/simdjson/singleheader", __dir__)
 
