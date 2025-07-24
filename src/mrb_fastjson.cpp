@@ -146,7 +146,7 @@ mrb_json_escape_string(mrb_state *mrb, const mrb_value str)
 {
   const char *src = RSTRING_PTR(str);
   mrb_int    len = RSTRING_LEN(str);
-  mrb_int    cap;
+  mrb_int    cap = 0;
 
   /* safe-capacity = len*6 + 2, with overflow checks */
   if (mrb_int_mul_overflow(len, 6, &cap) ||
