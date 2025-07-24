@@ -73,8 +73,14 @@ convert_element(mrb_state *mrb, dom::element el)
     case dom::element_type::INT64:
       return mrb_int_value(mrb, el.get<int64_t>());
 
-    case dom::element_type::UINT64:
-      return mrb_int_value(mrb, el.get<uint64_t>());
+    case dom::element_type::UINT64: {
+      uint64_t u = el.get<uint64_t>();
+      if (u <= INT64_MAX) {
+        return mrb_int_value(mrb, static_cast<int64_t>(u));
+      } else {
+        return mrb_bint_new_uint64(mrb, u);
+      }
+    }
 
     case dom::element_type::DOUBLE:
       return mrb_float_value(mrb, double(el));

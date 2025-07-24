@@ -180,3 +180,12 @@ assert("invalid UTF-8 bytes are treated as raw single-bytes") do
   # since 0xC0 ≥ 0x20 and no mapping, it’s emitted verbatim
   assert_equal "\"\xC0\"", out
 end
+
+assert("JSON.parse - uint64_t larger than INT64_MAX becomes BigInt") do
+  # 2^63 = 9223372036854775808 (INT64_MAX + 1)
+  json = '{"big":9223372036854775808}'
+  obj = JSON.parse(json)
+  val = obj["big"]
+
+  assert_equal 9223372036854775808, val
+end
