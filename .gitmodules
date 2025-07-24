@@ -1,0 +1,3 @@
+[submodule "deps/simdjson"]
+	path = deps/simdjson
+	url = https://github.com/simdjson/simdjson
