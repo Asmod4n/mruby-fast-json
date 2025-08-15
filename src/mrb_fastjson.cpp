@@ -16,7 +16,6 @@
 #endif
 #include <simdjson.h>
 
-
 using namespace simdjson;
 
 static mrb_value convert_element(mrb_state *mrb, dom::element el, mrb_bool symbolize_names);
@@ -68,7 +67,7 @@ static mrb_value
 mrb_json_parse(mrb_state *mrb, mrb_value self)
 {
   mrb_value str;
-  mrb_value kw_values[1];
+  mrb_value kw_values[1] = { mrb_undef_value() }; // default value for symbolize_names
   mrb_sym kw_names[] = { MRB_SYM(symbolize_names) };
   mrb_kwargs kwargs = {
     1,                // num: number of keywords
@@ -175,41 +174,68 @@ convert_object(mrb_state *mrb, dom::element obj_el, mrb_bool symbolize_names)
   return hash;
 }
 
-static inline void append_u00XX(std::string& out, unsigned char c) {
-    static constexpr char hex[] = "0123456789ABCDEF";
-    out.push_back('\\');
-    out.push_back('u');
-    out.push_back('0');
-    out.push_back('0');
-    out.push_back(hex[(c >> 4) & 0xF]);
-    out.push_back(hex[c & 0xF]);
+static inline void append_u00XX(std::string &out, unsigned char c) {
+    static const char hex[] = "0123456789ABCDEF";
+    char buf[6];
+    buf[0] = '\\';
+    buf[1] = 'u';
+    buf[2] = '0';
+    buf[3] = '0';
+    buf[4] = hex[c >> 4];
+    buf[5] = hex[c & 0x0F];
+    out.append(buf, 6);
 }
 
-// String escaping helper
 static void json_escape_string(mrb_state* mrb, mrb_value s, std::string& out) {
     const unsigned char* p = (const unsigned char*)RSTRING_PTR(s);
     mrb_int n = RSTRING_LEN(s);
 
+    // Vorab etwas Luft schaffen: Eingabelänge + Quotes + ~5% Aufschlag
+    out.reserve(out.size() + n + 2 + n/20);
+
     out.push_back('"');
+    mrb_int start = 0;
+
     for (mrb_int i = 0; i < n; ++i) {
         unsigned char c = p[i];
+        const char* esc = nullptr;
+        size_t esc_len = 0;
+
         switch (c) {
-            case '\"': out.append("\\\""); break;
-            case '\\': out.append("\\\\"); break;
-            case '\b': out.append("\\b");  break;
-            case '\f': out.append("\\f");  break;
-            case '\n': out.append("\\n");  break;
-            case '\r': out.append("\\r");  break;
-            case '\t': out.append("\\t");  break;
-default:
-  if (c < 0x20) {
-    append_u00XX(out, c);
-  } else {
-    out.push_back((char)c);
-  }
-  break;
+            case '\"': esc = "\\\""; esc_len = 2; break;
+            case '\\': esc = "\\\\"; esc_len = 2; break;
+            case '/':  esc = "\\/";  esc_len = 2; break; // optional
+            case '\b': esc = "\\b";  esc_len = 2; break;
+            case '\f': esc = "\\f";  esc_len = 2; break;
+            case '\n': esc = "\\n";  esc_len = 2; break;
+            case '\r': esc = "\\r";  esc_len = 2; break;
+            case '\t': esc = "\\t";  esc_len = 2; break;
+            default:
+                if (c < 0x20) {
+                    // Block bis hier kopieren
+                    if (i > start) {
+                        out.append(reinterpret_cast<const char*>(p + start), i - start);
+                    }
+                    append_u00XX(out, c);
+                    start = i + 1;
+                }
+                break;
+        }
+
+        if (esc) {
+            if (i > start) {
+                out.append(reinterpret_cast<const char*>(p + start), i - start);
+            }
+            out.append(esc, esc_len);
+            start = i + 1;
         }
     }
+
+    // Rest kopieren
+    if (n > start) {
+        out.append(reinterpret_cast<const char*>(p + start), n - start);
+    }
+
     out.push_back('"');
 }
 
@@ -256,10 +282,6 @@ static void json_encode(mrb_state* mrb, mrb_value v, std::string& out) {
             json_escape_string(mrb, mrb_sym_str(mrb, mrb_symbol(v)), out);
             break;
 
-        case MRB_TT_STRING:
-            json_escape_string(mrb, v, out);
-            break;
-
         case MRB_TT_FLOAT: {
             mrb_value s = mrb_float_to_str(mrb, v, NULL);
             out.append(RSTRING_PTR(s), RSTRING_LEN(s));
@@ -272,7 +294,13 @@ static void json_encode(mrb_state* mrb, mrb_value v, std::string& out) {
             out.append(p);
             break;
         }
-
+        case MRB_TT_HASH: {
+            out.push_back('{');
+            DumpHashCtx ctx{mrb, &out, true};
+            mrb_hash_foreach(mrb, mrb_hash_ptr(v), dump_hash_cb, &ctx);
+            out.push_back('}');
+            break;
+        }
         case MRB_TT_ARRAY: {
             out.push_back('[');
             mrb_int n = RARRAY_LEN(v);
@@ -283,15 +311,9 @@ static void json_encode(mrb_state* mrb, mrb_value v, std::string& out) {
             out.push_back(']');
             break;
         }
-
-        case MRB_TT_HASH: {
-            out.push_back('{');
-            DumpHashCtx ctx{mrb, &out, true};
-            mrb_hash_foreach(mrb, mrb_hash_ptr(v), dump_hash_cb, &ctx);
-            out.push_back('}');
+        case MRB_TT_STRING:
+            json_escape_string(mrb, v, out);
             break;
-        }
-
         default:
             json_escape_string(mrb, mrb_obj_as_string(mrb, v), out);
             break;
