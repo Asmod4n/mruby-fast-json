@@ -58,3 +58,5 @@ build_config.rb.lock
 /mruby/
 /.cache/
 compile_commands.json
+/.vscode/
+/.ccls-cache/
