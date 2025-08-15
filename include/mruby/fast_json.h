@@ -27,9 +27,9 @@ MRB_API mrb_value
 mrb_json_dump_mrb_obj(mrb_state *mrb, const mrb_value obj);
 
 MRB_API mrb_value
-mrb_json_dump_mrb_array(mrb_state *mrb, const mrb_value array);
+mrb_json_dump_mrb_hash(mrb_state *mrb, const mrb_value hash);
 
 MRB_API mrb_value
-mrb_json_dump_mrb_hash(mrb_state *mrb, const mrb_value hash);
+mrb_json_dump_mrb_array(mrb_state *mrb, const mrb_value array);
 
 MRB_END_DECL

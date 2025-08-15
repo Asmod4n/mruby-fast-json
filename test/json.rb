@@ -4,8 +4,44 @@ assert("JSON.parse - valid simple object") do
   assert_equal 30, obj["age"]
 end
 
+assert("JSON.parse - simple object with symbol keys") do
+  obj = JSON.parse('{"name":"Alice","age":30}', symbolize_names: true)
+  assert_equal "Alice", obj[:name]
+  assert_equal 30, obj[:age]
+  assert_nil obj["name"] # ensure string keys aren't present
+end
+
+assert("JSON.parse - nested object with symbol keys") do
+  obj = JSON.parse('{"user":{"id":1,"name":"Bob"}}', symbolize_names: true)
+  assert_equal({ id: 1, name: "Bob" }, obj[:user])
+end
+
+assert("JSON.parse - roundtrip with symbol keys preserved") do
+  original = { nested: { emoji: "😀" } }
+  json = JSON.dump(original)
+  obj  = JSON.parse(json, symbolize_names: true)
+  assert_equal "😀", obj[:nested][:emoji]
+end
+
+assert("JSON.parse - symbol key with UTF-8 content") do
+  obj = JSON.parse('{"挨拶":"こんにちは"}', symbolize_names: true)
+  assert_equal "こんにちは", obj[:"挨拶"]
+end
+
+assert("JSON.parse - mixed keys: symbol access only") do
+  obj = JSON.parse('{"a":1,"b":2}', symbolize_names: true)
+  keys = obj.keys
+  assert_equal [:a, :b], keys
+end
+
+assert("JSON.parse - empty object with symbol keys") do
+  obj = JSON.parse('{}', symbolize_names: true)
+  assert_equal({}, obj)
+end
+
+
 assert("JSON.parse - valid array of mixed types") do
-  arr = JSON.parse('[true, null, 42, "hi"]')
+  arr = JSON.parse('[true, null, 42, "hi"]'.freeze)
   assert_equal true, arr[0]
   assert_nil arr[1]
   assert_equal 42, arr[2]
