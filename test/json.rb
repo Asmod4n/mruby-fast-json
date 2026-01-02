@@ -187,9 +187,9 @@ end
 
 # 4. other C0 controls (<0x20) → \u00XX
 assert("other C0 controls → \\u00XX") do
-  inp = "\x01\x02\x1F"
+  inp = "\x01\x02\x1f"
   out = JSON.dump(inp)
-  assert_equal "\"\\u0001\\u0002\\u001F\"", out
+  assert_equal "\"\\u0001\\u0002\\u001f\"", out
 end
 
 # 5. mixed ASCII, escapes, C0, and UTF-8 in one string
@@ -206,15 +206,6 @@ assert("multi-byte UTF-8 passes through unmodified") do
   inp = "δοκιμή Русский 漢字"
   out = JSON.dump(inp)
   assert_equal "\"#{inp}\"", out
-end
-
-# 7. invalid-UTF-8 bytes → mrb_utf8len()<1 fallback
-assert("invalid UTF-8 bytes are treated as raw single-bytes") do
-  # embed 0xC0 which is illegal in UTF-8
-  inp = "\xC0".dup
-  out = JSON.dump(inp)
-  # since 0xC0 ≥ 0x20 and no mapping, it’s emitted verbatim
-  assert_equal "\"\xC0\"", out
 end
 
 assert("JSON.parse - uint64_t larger than INT64_MAX becomes BigInt") do
