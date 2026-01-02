@@ -14,6 +14,7 @@
 #define NDEBUG
 #define __OPTIMIZE__=1
 #endif
+
 #include <simdjson.h>
 
 using namespace simdjson;
@@ -22,23 +23,23 @@ static mrb_value convert_element(mrb_state *mrb, dom::element el, mrb_bool symbo
 static mrb_value convert_array(mrb_state *mrb, dom::element arr_el, mrb_bool symbolize_names);
 static mrb_value convert_object(mrb_state *mrb, dom::element obj_el, mrb_bool symbolize_names);
 
-static void raise_simdjson_error(mrb_state *mrb, simdjson::error_code code) {
+static void raise_simdjson_error(mrb_state *mrb, error_code code) {
   const char *msg = error_message(code);
 
   switch (code) {
-    case simdjson::UNCLOSED_STRING:       mrb_raise(mrb, E_JSON_UNCLOSED_STRING_ERROR, msg); break;
-    case simdjson::STRING_ERROR:          mrb_raise(mrb, E_JSON_STRING_ERROR, msg); break;
-    case simdjson::TAPE_ERROR:            mrb_raise(mrb, E_JSON_TAPE_ERROR, msg); break;
-    case simdjson::DEPTH_ERROR:           mrb_raise(mrb, E_JSON_DEPTH_ERROR, msg); break;
-    case simdjson::MEMALLOC:              mrb_raise(mrb, E_JSON_MEMALLOC_ERROR, msg); break;
-    case simdjson::CAPACITY:              mrb_raise(mrb, E_JSON_CAPACITY_ERROR, msg); break;
-    case simdjson::NUMBER_ERROR:          mrb_raise(mrb, E_JSON_NUMBER_ERROR, msg); break;
-    case simdjson::UTF8_ERROR:            mrb_raise(mrb, E_JSON_UTF8_ERROR, msg); break;
-    case simdjson::UNEXPECTED_ERROR:      mrb_raise(mrb, E_JSON_UNEXPECTED_ERROR, msg); break;
-    case simdjson::EMPTY:                 mrb_raise(mrb, E_JSON_EMPTY_INPUT_ERROR, msg); break;
-    case simdjson::INCORRECT_TYPE:        mrb_raise(mrb, E_JSON_INCORRECT_TYPE_ERROR, msg); break;
-    case simdjson::NO_SUCH_FIELD:         mrb_raise(mrb, E_JSON_NO_SUCH_FIELD_ERROR, msg); break;
-    case simdjson::UNSUPPORTED_ARCHITECTURE: mrb_raise(mrb, E_JSON_UNSUPPORTED_ARCHITECTURE_ERROR, msg); break;
+    case UNCLOSED_STRING:       mrb_raise(mrb, E_JSON_UNCLOSED_STRING_ERROR, msg); break;
+    case STRING_ERROR:          mrb_raise(mrb, E_JSON_STRING_ERROR, msg); break;
+    case TAPE_ERROR:            mrb_raise(mrb, E_JSON_TAPE_ERROR, msg); break;
+    case DEPTH_ERROR:           mrb_raise(mrb, E_JSON_DEPTH_ERROR, msg); break;
+    case MEMALLOC:              mrb_raise(mrb, E_JSON_MEMALLOC_ERROR, msg); break;
+    case CAPACITY:              mrb_raise(mrb, E_JSON_CAPACITY_ERROR, msg); break;
+    case NUMBER_ERROR:          mrb_raise(mrb, E_JSON_NUMBER_ERROR, msg); break;
+    case UTF8_ERROR:            mrb_raise(mrb, E_JSON_UTF8_ERROR, msg); break;
+    case UNEXPECTED_ERROR:      mrb_raise(mrb, E_JSON_UNEXPECTED_ERROR, msg); break;
+    case EMPTY:                 mrb_raise(mrb, E_JSON_EMPTY_INPUT_ERROR, msg); break;
+    case INCORRECT_TYPE:        mrb_raise(mrb, E_JSON_INCORRECT_TYPE_ERROR, msg); break;
+    case NO_SUCH_FIELD:         mrb_raise(mrb, E_JSON_NO_SUCH_FIELD_ERROR, msg); break;
+    case UNSUPPORTED_ARCHITECTURE: mrb_raise(mrb, E_JSON_UNSUPPORTED_ARCHITECTURE_ERROR, msg); break;
     default:                              mrb_raise(mrb, E_JSON_PARSER_ERROR, msg); break;
   }
 }
@@ -174,157 +175,93 @@ convert_object(mrb_state *mrb, dom::element obj_el, mrb_bool symbolize_names)
   return hash;
 }
 
-static inline void append_u00XX(std::string &out, unsigned char c) {
-    static const char hex[] = "0123456789ABCDEF";
-    char buf[6];
-    buf[0] = '\\';
-    buf[1] = 'u';
-    buf[2] = '0';
-    buf[3] = '0';
-    buf[4] = hex[c >> 4];
-    buf[5] = hex[c & 0x0F];
-    out.append(buf, 6);
-}
-
-static void json_escape_string(mrb_state* mrb, mrb_value s, std::string& out) {
-    const unsigned char* p = (const unsigned char*)RSTRING_PTR(s);
-    mrb_int n = RSTRING_LEN(s);
-
-    // Vorab etwas Luft schaffen: Eingabelänge + Quotes + ~5% Aufschlag
-    out.reserve(out.size() + n + 2 + n/20);
-
-    out.push_back('"');
-    mrb_int start = 0;
-
-    for (mrb_int i = 0; i < n; ++i) {
-        unsigned char c = p[i];
-        const char* esc = nullptr;
-        size_t esc_len = 0;
-
-        switch (c) {
-            case '\"': esc = "\\\""; esc_len = 2; break;
-            case '\\': esc = "\\\\"; esc_len = 2; break;
-            case '/':  esc = "\\/";  esc_len = 2; break; // optional
-            case '\b': esc = "\\b";  esc_len = 2; break;
-            case '\f': esc = "\\f";  esc_len = 2; break;
-            case '\n': esc = "\\n";  esc_len = 2; break;
-            case '\r': esc = "\\r";  esc_len = 2; break;
-            case '\t': esc = "\\t";  esc_len = 2; break;
-            default:
-                if (c < 0x20) {
-                    // Block bis hier kopieren
-                    if (i > start) {
-                        out.append(reinterpret_cast<const char*>(p + start), i - start);
-                    }
-                    append_u00XX(out, c);
-                    start = i + 1;
-                }
-                break;
-        }
-
-        if (esc) {
-            if (i > start) {
-                out.append(reinterpret_cast<const char*>(p + start), i - start);
-            }
-            out.append(esc, esc_len);
-            start = i + 1;
-        }
-    }
-
-    // Rest kopieren
-    if (n > start) {
-        out.append(reinterpret_cast<const char*>(p + start), n - start);
-    }
-
-    out.push_back('"');
-}
 
 // Context struct for hash_foreach
 struct DumpHashCtx {
     mrb_state* mrb;
-    std::string* out;
+    builder::string_builder& builder;
     bool first;
 };
 
 // Forward declare encoder
-static void json_encode(mrb_state* mrb, mrb_value v, std::string& out);
+static void json_encode(mrb_state* mrb, mrb_value v, builder::string_builder& builder);
 
 // Hash foreach callback
 static int dump_hash_cb(mrb_state* mrb, mrb_value key, mrb_value val, void* data) {
     auto* ctx = static_cast<DumpHashCtx*>(data);
 
-    if (!ctx->first) ctx->out->push_back(',');
-    ctx->first = false;
+    if (ctx->first) ctx->first = false;
+    else ctx->builder.append_comma();
 
-    json_encode(mrb, key, *ctx->out);
-    ctx->out->push_back(':');
-    json_encode(mrb, val, *ctx->out);
+    json_encode(mrb, key, ctx->builder);
+    ctx->builder.append_colon();
+    json_encode(mrb, val, ctx->builder);
 
     return 0; // continue iteration
 }
 
 // Main encoder
-static void json_encode(mrb_state* mrb, mrb_value v, std::string& out) {
+static void json_encode(mrb_state* mrb, mrb_value v, builder::string_builder& builder) {
     switch (mrb_type(v)) {
         case MRB_TT_FALSE:
             if (mrb_nil_p(v)) {
-                out.append("null");
+                builder.append_null();
             } else {
-                out.append("false");
+                builder.append(false);
             }
             break;
-
         case MRB_TT_TRUE:
-            out.append("true");
+            builder.append(true);
             break;
-
-        case MRB_TT_SYMBOL:
-            json_escape_string(mrb, mrb_sym_str(mrb, mrb_symbol(v)), out);
-            break;
-
+        case MRB_TT_SYMBOL: {
+            v = mrb_sym_str(mrb, mrb_symbol(v));
+            std::string_view sv(RSTRING_PTR(v), RSTRING_LEN(v));
+            builder.escape_and_append_with_quotes(sv);
+        } break;
         case MRB_TT_FLOAT: {
-            mrb_value s = mrb_float_to_str(mrb, v, NULL);
-            out.append(RSTRING_PTR(s), RSTRING_LEN(s));
-            break;
-        }
+            builder.append(mrb_float(v));
+
+        } break;
 
         case MRB_TT_INTEGER: {
-            char buf[MRB_INT_BIT + 1];
-            char* p = mrb_int_to_cstr(buf, sizeof(buf), mrb_integer(v), 10);
-            out.append(p);
-            break;
-        }
+            builder.append(mrb_integer(v));
+        } break;
         case MRB_TT_HASH: {
-            out.push_back('{');
-            DumpHashCtx ctx{mrb, &out, true};
+            builder.start_object();
+            DumpHashCtx ctx{mrb, builder, true};
             mrb_hash_foreach(mrb, mrb_hash_ptr(v), dump_hash_cb, &ctx);
-            out.push_back('}');
-            break;
-        }
+            builder.end_object();
+        } break;
         case MRB_TT_ARRAY: {
-            out.push_back('[');
+            builder.start_array();
             mrb_int n = RARRAY_LEN(v);
             for (mrb_int i = 0; i < n; ++i) {
-                if (i) out.push_back(',');
-                json_encode(mrb, mrb_ary_ref(mrb, v, i), out);
+                if (i) builder.append_comma();
+                json_encode(mrb, mrb_ary_ref(mrb, v, i), builder);
             }
-            out.push_back(']');
-            break;
+            builder.end_array();
+        } break;
+        case MRB_TT_STRING: {
+            std::string_view sv(RSTRING_PTR(v), RSTRING_LEN(v));
+            builder.escape_and_append_with_quotes(sv);
+        } break;
+        default: {
+            v = mrb_obj_as_string(mrb, v);
+            std::string_view sv(RSTRING_PTR(v), RSTRING_LEN(v));
+            builder.escape_and_append_with_quotes(sv);
         }
-        case MRB_TT_STRING:
-            json_escape_string(mrb, v, out);
-            break;
-        default:
-            json_escape_string(mrb, mrb_obj_as_string(mrb, v), out);
-            break;
     }
 }
 
 // Public dump entrypoint for any mrb_value
 MRB_API mrb_value mrb_json_dump_mrb_obj(mrb_state* mrb, mrb_value obj) {
-    std::string out;
-    json_encode(mrb, obj, out);
-    return mrb_str_new(mrb, out.data(), out.size());
+    builder::string_builder sb;
+    json_encode(mrb, obj, sb);
+    if (!sb.validate_unicode()) {
+      mrb_raise(mrb, E_JSON_UTF8_ERROR, "invalid utf-8");
+    }
+    std::string_view p = sb.view();
+    return mrb_str_new(mrb, p.data(), p.size());
 }
 
 static mrb_value
