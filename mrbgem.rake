@@ -1,4 +1,26 @@
 MRuby::Gem::Specification.new('mruby-fast-json') do |spec|
+  cc_ok  = spec.build.cc.defines.include?('MRB_UTF8_STRING')
+  cxx_ok = spec.build.cxx.defines.include?('MRB_UTF8_STRING')
+
+  unless cc_ok
+    fail <<~MSG
+      mruby-fast-json requires MRB_UTF8_STRING for MRuby core.
+      Add this to your build_config.rb:
+
+        conf.cc.defines  << 'MRB_UTF8_STRING'
+        conf.cxx.defines << 'MRB_UTF8_STRING'
+    MSG
+  end
+
+  unless cxx_ok
+    fail <<~MSG
+      mruby-fast-json requires MRB_UTF8_STRING for C++ sources.
+      Add this to your build_config.rb:
+
+        conf.cxx.defines << 'MRB_UTF8_STRING'
+    MSG
+  end
+
   spec.license = 'Apache-2'
   spec.author  = 'Hendrik Beskow'
   spec.summary = 'simdjson for mruby'

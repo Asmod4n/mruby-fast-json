@@ -128,18 +128,15 @@ convert_element(mrb_state *mrb, dom::element el, mrb_bool symbolize_names)
     case dom::element_type::NULL_VALUE:
       return mrb_nil_value();
   }
-
-  // should never happen
-  mrb_raise(mrb, E_RUNTIME_ERROR, "[BUG] unexpected JSON type");
-  return mrb_undef_value();
 }
 
 static mrb_value
 convert_array(mrb_state *mrb, dom::element arr_el, mrb_bool symbolize_names)
 {
-  mrb_value ary = mrb_ary_new(mrb);
+  dom::array arr = arr_el.get_array();
+  mrb_value ary = mrb_ary_new_capa(mrb, arr.size());
   int arena_index = mrb_gc_arena_save(mrb);
-  for (dom::element item : arr_el) {
+  for (dom::element item : arr) {
     mrb_ary_push(mrb, ary, convert_element(mrb, item, symbolize_names));
     mrb_gc_arena_restore(mrb, arena_index);
   }
@@ -161,11 +158,13 @@ convert_key_as_sym(mrb_state* mrb, std::string_view sv) {
 static mrb_value
 convert_object(mrb_state *mrb, dom::element obj_el, mrb_bool symbolize_names)
 {
-  mrb_value hash = mrb_hash_new(mrb);
+  dom::object obj = obj_el.get_object();
+
+  mrb_value hash = mrb_hash_new_capa(mrb, obj.size());
   int arena_index = mrb_gc_arena_save(mrb);
   KeyConverterFn convert_key = symbolize_names ? convert_key_as_sym : convert_key_as_str;
 
-  for (auto& kv : dom::object(obj_el)) {
+  for (auto& kv : obj) {
     mrb_value key = convert_key(mrb, kv.key);
     mrb_value val = convert_element(mrb, kv.value, symbolize_names);
     mrb_hash_set(mrb, hash, key, val);
@@ -175,15 +174,11 @@ convert_object(mrb_state *mrb, dom::element obj_el, mrb_bool symbolize_names)
   return hash;
 }
 
-
-// Context struct for hash_foreach
 struct DumpHashCtx {
-    mrb_state* mrb;
     builder::string_builder& builder;
     bool first;
 };
 
-// Forward declare encoder
 static void json_encode(mrb_state* mrb, mrb_value v, builder::string_builder& builder);
 
 // Hash foreach callback
@@ -228,18 +223,24 @@ static void json_encode(mrb_state* mrb, mrb_value v, builder::string_builder& bu
         } break;
         case MRB_TT_HASH: {
             builder.start_object();
-            DumpHashCtx ctx{mrb, builder, true};
+            DumpHashCtx ctx{builder, true};
             mrb_hash_foreach(mrb, mrb_hash_ptr(v), dump_hash_cb, &ctx);
             builder.end_object();
         } break;
         case MRB_TT_ARRAY: {
-            builder.start_array();
-            mrb_int n = RARRAY_LEN(v);
-            for (mrb_int i = 0; i < n; ++i) {
-                if (i) builder.append_comma();
-                json_encode(mrb, mrb_ary_ref(mrb, v, i), builder);
-            }
-            builder.end_array();
+          builder.start_array();
+          mrb_int n = RARRAY_LEN(v);
+
+          if (n > 0) {
+              json_encode(mrb, mrb_ary_ref(mrb, v, 0), builder);
+
+              for (mrb_int i = 1; i < n; ++i) {
+                  builder.append_comma();
+                  json_encode(mrb, mrb_ary_ref(mrb, v, i), builder);
+              }
+          }
+
+          builder.end_array();
         } break;
         case MRB_TT_STRING: {
             std::string_view sv(RSTRING_PTR(v), RSTRING_LEN(v));
@@ -257,7 +258,7 @@ static void json_encode(mrb_state* mrb, mrb_value v, builder::string_builder& bu
 MRB_API mrb_value mrb_json_dump_mrb_obj(mrb_state* mrb, mrb_value obj) {
     builder::string_builder sb;
     json_encode(mrb, obj, sb);
-    if (!sb.validate_unicode()) {
+    if (unlikely(!sb.validate_unicode())) {
       mrb_raise(mrb, E_JSON_UTF8_ERROR, "invalid utf-8");
     }
     std::string_view p = sb.view();
@@ -276,12 +277,12 @@ mrb_json_dump_m(mrb_state *mrb, mrb_value self)
 extern "C" void
 mrb_mruby_fast_json_gem_init(mrb_state *mrb)
 {
-  struct RClass *json_mod    = mrb_define_module(mrb, "JSON");
-  struct RClass *json_error  = mrb_define_class_under(mrb, json_mod, "ParserError", mrb->eStandardError_class);
+  struct RClass *json_mod    = mrb_define_module_id(mrb, MRB_SYM(JSON));
+  struct RClass *json_error  = mrb_define_class_under_id(mrb, json_mod, MRB_SYM(ParserError), mrb->eStandardError_class);
 
 #define DEFINE_JSON_ERROR(NAME) \
-  mrb_define_class_under(mrb, json_mod, #NAME "Error", json_error)
-  // Specific error classes
+  mrb_define_class_under_id(mrb, json_mod, MRB_SYM(NAME##Error), json_error)
+
   DEFINE_JSON_ERROR(Tape);
   DEFINE_JSON_ERROR(String);
   DEFINE_JSON_ERROR(UnclosedString);
@@ -293,8 +294,8 @@ mrb_mruby_fast_json_gem_init(mrb_state *mrb)
   DEFINE_JSON_ERROR(IncorrectType);
   DEFINE_JSON_ERROR(EmptyInput);
 
-  mrb_define_class_method(mrb, json_mod, "parse", mrb_json_parse, MRB_ARGS_REQ(1)|MRB_ARGS_KEY(1, 0));
-  mrb_define_class_method(mrb, json_mod, "dump", mrb_json_dump_m, MRB_ARGS_REQ(1));
+  mrb_define_class_method_id(mrb, json_mod, MRB_SYM(parse), mrb_json_parse, MRB_ARGS_REQ(1)|MRB_ARGS_KEY(1, 0));
+  mrb_define_class_method_id(mrb, json_mod, MRB_SYM(dump), mrb_json_dump_m, MRB_ARGS_REQ(1));
 }
 
 extern "C" void

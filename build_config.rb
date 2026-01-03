@@ -9,7 +9,10 @@ MRuby::Build.new do |conf|
     end
     #conf.cc.flags << '-fno-omit-frame-pointer' << '-g' << '-ggdb' << '-Og'
     #conf.enable_debug
+    conf.cc.defines  << 'MRB_UTF8_STRING'
+    conf.cxx.defines << 'MRB_UTF8_STRING'
     conf.enable_test
     conf.gembox 'full-core'
+
     conf.gem File.expand_path(File.dirname(__FILE__))
 end
