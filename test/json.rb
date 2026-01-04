@@ -216,3 +216,41 @@ assert("JSON.parse - uint64_t larger than INT64_MAX becomes BigInt") do
 
   assert_equal 9223372036854775808, val
 end
+
+assert("JSON.parse - TAtomError") do
+  assert_raise JSON::TAtomError do
+    JSON.parse('tru')
+  end
+end
+
+assert("JSON.parse - FAtomError") do
+  assert_raise JSON::FAtomError do
+    JSON.parse('fals')
+  end
+end
+
+assert("JSON.parse - NAtomError") do
+  assert_raise JSON::NAtomError do
+    JSON.parse('nul')
+  end
+end
+
+assert("JSON.parse - BigIntError") do
+  huge = '{"x":' + ('9' * 20000) + '}'
+  assert_raise JSON::BigIntError do
+    JSON.parse(huge)
+  end
+end
+
+assert("JSON.parse - BigIntError") do
+  huge = '{"x":' + ('9' * 20000) + '}'
+  assert_raise JSON::BigIntError do
+    JSON.parse(huge)
+  end
+end
+assert("JSON.parse - UnescapedCharsError") do
+  json = "\"hello\u0001world\""
+  assert_raise JSON::UnescapedCharsError do
+    JSON.parse(json)
+  end
+end
