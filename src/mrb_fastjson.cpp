@@ -17,14 +17,50 @@ MRB_BEGIN_DECL
 MRB_END_DECL
 using namespace simdjson;
 
+#ifdef _WIN32
+#include <windows.h>
+#include <sysinfoapi.h>
+#else
+#include <unistd.h>
+#endif
+#include <cstdio>
+
+
+// Returns the default size of the page in bytes on this system.
+static long pagesize;
+
+// Returns true if the buffer + len + simdjson::SIMDJSON_PADDING crosses the
+// page boundary.
+bool need_allocation(const char* buf, size_t len, size_t capa) {
+#ifdef MRB_DEBUG
+  return true; // always allocate padded_string in debug mode to detect issues
+#endif
+  // 2. Check Ruby's reported capacity
+  if (capa >= len + SIMDJSON_PADDING) {
+    return false; // safe
+  }
+
+  // 3. Page boundary fallback (always safe)
+  uintptr_t end = reinterpret_cast<uintptr_t>(buf + len - 1);
+  uintptr_t offset = end % pagesize;
+  if (offset + SIMDJSON_PADDING < static_cast<uintptr_t>(pagesize)) {
+      return false;
+  }
+
+  return true; // must allocate padded_string
+}
+
 static padded_string_view
 simdjson_safe_view_from_mrb_string(mrb_state *mrb, mrb_value str,
                                    padded_string &jsonbuffer) {
-  const char *cstr = RSTRING_PTR(str);
   size_t len = RSTRING_LEN(str);
+  if (likely(!need_allocation(RSTRING_PTR(str), len, RSTRING_CAPA(str)))) {
+    str = mrb_obj_freeze(mrb, str);
+    return padded_string_view(RSTRING_PTR(str), len, len + SIMDJSON_PADDING); // safe to parse in-place
+  }
 
   if (mrb_frozen_p(mrb_obj_ptr(str))) {
-    jsonbuffer = padded_string(cstr, len);
+    jsonbuffer = padded_string(RSTRING_PTR(str), len);
     return jsonbuffer;
   }
 
@@ -38,13 +74,13 @@ simdjson_safe_view_from_mrb_string(mrb_state *mrb, mrb_value str,
   if ((size_t)RSTRING_CAPA(str) < required) {
     // grow Ruby string to required bytes (len + padding)
     str = mrb_str_resize(mrb, str, required);
+    str = mrb_obj_freeze(mrb, str);
     // restore logical length to original JSON length
     RSTR_SET_LEN(RSTRING(str), len);
-    cstr = RSTRING_PTR(str);
   }
 
   // capacity is now at least `required`
-  return padded_string_view(cstr, len, required);
+  return padded_string_view(RSTRING_PTR(str), len, required);
 }
 
 
@@ -306,8 +342,11 @@ mrb_json_doc_initialize(mrb_state* mrb, mrb_value self)
   mrb_iv_set(mrb, self, MRB_SYM(source), str);
 
   auto* doc = mrb_cpp_new<mrb_json_doc>(mrb, self);
-  doc->source = str;
-  if (mrb_frozen_p(mrb_obj_ptr(str))) {
+  size_t len = RSTRING_LEN(str);
+  if (likely(!need_allocation(RSTRING_PTR(str), len, RSTRING_CAPA(str)))) {
+    str = mrb_obj_freeze(mrb, str);
+    doc->buffer = padded_string_view(RSTRING_PTR(str), len, len + SIMDJSON_PADDING);
+  } else if (mrb_frozen_p(mrb_obj_ptr(str))) {
     doc->buffer = padded_string(RSTRING_PTR(str), RSTRING_LEN(str));
   } else {
     size_t len = RSTRING_LEN(str);
@@ -322,9 +361,10 @@ mrb_json_doc_initialize(mrb_state* mrb, mrb_value self)
       str = mrb_str_resize(mrb, str, required);
       RSTR_SET_LEN(RSTRING(str), len);
     }
-    mrb_obj_freeze(mrb, str);
+    str = mrb_obj_freeze(mrb, str);
     doc->buffer = padded_string_view(RSTRING_PTR(str), len, RSTRING_CAPA(str));
   }
+  doc->source = str;
 
   auto result = doc->parser.iterate(doc->buffer);
   if (unlikely(result.error())) raise_simdjson_error_with_reparse(mrb, doc, result.error());
@@ -837,6 +877,15 @@ DEFINE_MRB_TO_JSON(mrb_symbol_to_json, json_encode_symbol(mrb, o, sb));
 
 MRB_BEGIN_DECL
 void mrb_mruby_fast_json_gem_init(mrb_state *mrb) {
+
+#ifdef _WIN32
+  SYSTEM_INFO sysInfo;
+  GetSystemInfo(&sysInfo);
+  pagesize = sysInfo.dwPageSize;
+#else
+  pagesize = sysconf(_SC_PAGESIZE);
+#endif
+
   struct RClass *json_mod = mrb_define_module_id(mrb, MRB_SYM(JSON));
   struct RClass *json_error = mrb_define_class_under_id(
       mrb, json_mod, MRB_SYM(ParserError), mrb->eStandardError_class);
