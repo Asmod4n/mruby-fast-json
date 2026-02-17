@@ -4,10 +4,10 @@ MRuby::Build.new do |conf|
         ('A'..'Z').to_a.any? { |vol| Dir.exist?("#{vol}:") }
     end
     unless for_windows?
-        conf.enable_sanitizer "address,undefined"
-        conf.linker.flags_before_libraries << '-static-libasan'
+        #conf.enable_sanitizer "address,undefined"
+        #conf.linker.flags_before_libraries << '-static-libasan'
     end
-    conf.cc.flags << '-fno-omit-frame-pointer' << '-g' << '-ggdb' << '-Og'
+    conf.cxx.flags << '-fno-omit-frame-pointer' << '-g' << '-ggdb' << '-Og'
     conf.enable_debug
     conf.cc.defines  << 'MRB_UTF8_STRING'
     conf.cxx.defines << 'MRB_UTF8_STRING'
