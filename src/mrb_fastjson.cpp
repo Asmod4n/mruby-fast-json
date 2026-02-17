@@ -344,6 +344,9 @@ mrb_json_doc_initialize(mrb_state* mrb, mrb_value self)
   auto* doc = mrb_cpp_new<mrb_json_doc>(mrb, self);
   size_t len = RSTRING_LEN(str);
   if (likely(!need_allocation(RSTRING_PTR(str), len, RSTRING_CAPA(str)))) {
+    if (unlikely(len > SIZE_MAX - SIMDJSON_PADDING)) {
+      mrb_raise(mrb, E_ARGUMENT_ERROR, "input too large");
+    }
     str = mrb_obj_freeze(mrb, str);
     doc->buffer = padded_string_view(RSTRING_PTR(str), len, len + SIMDJSON_PADDING);
   } else if (mrb_frozen_p(mrb_obj_ptr(str))) {
