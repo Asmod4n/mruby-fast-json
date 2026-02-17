@@ -322,7 +322,7 @@ mrb_json_doc_initialize(mrb_state* mrb, mrb_value self)
       str = mrb_str_resize(mrb, str, required);
       RSTR_SET_LEN(RSTRING(str), len);
     }
-
+    mrb_obj_freeze(mrb, str);
     doc->buffer = padded_string_view(RSTRING_PTR(str), len, RSTRING_CAPA(str));
   }
 
