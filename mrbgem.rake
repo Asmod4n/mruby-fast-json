@@ -25,13 +25,9 @@ MRuby::Gem::Specification.new('mruby-fast-json') do |spec|
   spec.author  = 'Hendrik Beskow'
   spec.summary = 'simdjson for mruby'
   spec.add_dependency 'mruby-bigint'
-  spec.add_dependency 'mruby-chrono'
   spec.add_dependency 'mruby-c-ext-helpers'
-  if spec.for_windows?
-    spec.cxx_flags << '/std=c++17'
-  else
-    spec.cxx.flags << '-std=c++17'
-  end
+  spec.add_dependency 'mruby-chrono'
+
   unless spec.cxx.defines.include? 'MRB_DEBUG'
     spec.cxx.flags << '-O3'
     spec.cxx.defines << 'NDEBUG' << '__OPTIMIZE__=1'

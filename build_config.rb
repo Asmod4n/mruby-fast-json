@@ -7,8 +7,8 @@ MRuby::Build.new do |conf|
         #conf.enable_sanitizer "address,undefined"
         #conf.linker.flags_before_libraries << '-static-libasan'
     end
-    conf.cxx.flags << '-fno-omit-frame-pointer' << '-g' << '-ggdb' << '-Og'
-    conf.enable_debug
+    #conf.cxx.flags << '-fno-omit-frame-pointer' << '-g' << '-ggdb' << '-Og'
+    #conf.enable_debug
     conf.cc.defines  << 'MRB_UTF8_STRING'
     conf.cxx.defines << 'MRB_UTF8_STRING'
     conf.enable_test
