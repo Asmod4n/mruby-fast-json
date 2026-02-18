@@ -1,6 +1,6 @@
 json_size = File.size("output.json")
 $json = File.read("output.json")
-
+$json.freeze
 def measure_json_dump_performance(json_size)
   # --- Parse once ---
   puts "Parse start: #{Time.now}"

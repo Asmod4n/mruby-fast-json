@@ -85,7 +85,6 @@ simdjson_safe_view_from_mrb_string(mrb_state *mrb, mrb_value str,
   return padded_string_view(RSTRING_PTR(str), len, required);
 }
 
-
 static mrb_value convert_array(mrb_state *mrb, dom::element arr_el,
                                mrb_bool symbolize_names);
 static mrb_value convert_object(mrb_state *mrb, dom::element obj_el,
@@ -322,6 +321,7 @@ static mrb_value mrb_json_parse_m(mrb_state *mrb, mrb_value self) {
 struct mrb_json_doc {
   mrb_value source;
   ondemand::parser parser;
+  padded_string jsonbuffer;
   padded_string_view buffer;
   ondemand::document doc;
   bool need_to_reparse = false;
@@ -342,31 +342,7 @@ mrb_json_doc_initialize(mrb_state* mrb, mrb_value self)
   mrb_get_args(mrb, "S", &str);
 
   auto* doc = mrb_cpp_new<mrb_json_doc>(mrb, self);
-  size_t len = RSTRING_LEN(str);
-  if (likely(!need_allocation(RSTRING_PTR(str), len, RSTRING_CAPA(str)))) {
-    if (unlikely(len > SIZE_MAX - SIMDJSON_PADDING)) {
-      mrb_raise(mrb, E_ARGUMENT_ERROR, "input too large");
-    }
-    str = mrb_obj_freeze(mrb, str);
-    doc->buffer = padded_string_view(RSTRING_PTR(str), len, len + SIMDJSON_PADDING);
-  } else if (mrb_frozen_p(mrb_obj_ptr(str))) {
-    doc->buffer = padded_string(RSTRING_PTR(str), RSTRING_LEN(str));
-  } else {
-    size_t len = RSTRING_LEN(str);
-
-    if (unlikely(len > SIZE_MAX - SIMDJSON_PADDING)) {
-      mrb_raise(mrb, E_ARGUMENT_ERROR, "input too large");
-    }
-
-    size_t required = len + SIMDJSON_PADDING;
-
-    if ((size_t)RSTRING_CAPA(str) < required) {
-      str = mrb_str_resize(mrb, str, required);
-      RSTR_SET_LEN(RSTRING(str), len);
-    }
-    str = mrb_obj_freeze(mrb, str);
-    doc->buffer = padded_string_view(RSTRING_PTR(str), len, RSTRING_CAPA(str));
-  }
+  doc->buffer = simdjson_safe_view_from_mrb_string(mrb, str, doc->jsonbuffer);
   mrb_iv_set(mrb, self, MRB_SYM(source), str);
   doc->source = str;
 
