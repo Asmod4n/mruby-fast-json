@@ -1,8 +1,9 @@
 module JSON
   class << self
     attr_accessor :zero_copy_parsing
-    def parse_lazy(json)
-      Document.new(json)
+
+    def load_lazy(source)
+      Document.new(source, load: true)
     end
   end
 end

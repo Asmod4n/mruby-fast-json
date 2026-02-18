@@ -13,6 +13,7 @@
 #include <simdjson.h>
 #include <mruby/variable.h>
 #include <string_view>
+#include <mruby/error.h>
 MRB_BEGIN_DECL
 #include <mruby/internal.h>
 MRB_END_DECL
@@ -26,8 +27,6 @@ using namespace simdjson;
 #endif
 #include <cstdio>
 
-
-// Returns the default size of the page in bytes on this system.
 static long pagesize;
 
 // Returns true if the buffer + len + simdjson::SIMDJSON_PADDING crosses the
@@ -332,6 +331,15 @@ struct mrb_json_doc {
     mrb_iv_set(mrb, self, MRB_SYM(source), str);
     source = str;
   }
+
+  mrb_json_doc(mrb_state* mrb, mrb_value self, padded_string&& filebuf)
+  {
+    jsonbuffer = std::move(filebuf);
+    buffer = padded_string_view(jsonbuffer);
+    source = mrb_obj_freeze(mrb, mrb_str_new_static(mrb, jsonbuffer.data(), jsonbuffer.size()));
+    mrb_iv_set(mrb, self, MRB_SYM(source), source);
+  }
+
 };
 MRB_CPP_DEFINE_TYPE(mrb_json_doc, mrb_json_doc)
 
@@ -346,12 +354,37 @@ static mrb_value
 mrb_json_doc_initialize(mrb_state* mrb, mrb_value self)
 {
   mrb_value str;
-  mrb_get_args(mrb, "S", &str);
+  mrb_value kw_values[1] = { mrb_undef_value() };
+  mrb_sym kw_names[] = { MRB_SYM(load) };
+  mrb_kwargs kwargs = { 1, 0, kw_names, kw_values, NULL };
 
-  auto* doc = mrb_cpp_new<mrb_json_doc>(mrb, self, mrb, self, str);
+  // Accept: Document.new(arg, load: true/false)
+  mrb_get_args(mrb, "S:", &str, &kwargs);
+
+  mrb_bool load_from_file = FALSE;
+  if (!mrb_undef_p(kw_values[0])) {
+    load_from_file = mrb_bool(kw_values[0]);
+  }
+
+  mrb_json_doc* doc = nullptr;
+  if (load_from_file) {
+    // --- EXPLICIT FILE LOAD ---
+    std::string_view path(RSTRING_PTR(str), RSTRING_LEN(str));
+    auto res = padded_string::load(path);
+    if (unlikely(res.error() != SUCCESS)) {
+      mrb_sys_fail(mrb, "failed to read file");
+    }
+    doc = mrb_cpp_new<mrb_json_doc>(
+      mrb, self, mrb, self,
+      std::move(res.value())
+    );
+  } else {
+    // --- EXPLICIT STRING PARSE ---
+    doc = mrb_cpp_new<mrb_json_doc>(mrb, self, mrb, self, str);
+  }
 
   auto result = doc->parser.iterate(doc->buffer);
-  if (unlikely(result.error())) raise_simdjson_error_with_reparse(mrb, doc, result.error());
+  if (unlikely(result.error() != SUCCESS)) raise_simdjson_error_with_reparse(mrb, doc, result.error());
   doc->doc = std::move(result.value());
 
   return self;
@@ -524,24 +557,24 @@ convert_string_from_ondemand(mrb_state* mrb, mrb_json_doc *doc, ondemand::value&
       raise_simdjson_error_with_reparse(mrb, doc, raw_json.error());
   }
   auto raw = raw_json.value();
-  
+
   // raw = "\"...\"" including quotes
   const char* raw_start = raw.data() + 1;     // inside opening quote
   size_t raw_len = raw.size() - 2;            // exclude both quotes
-  
+
   // 2. Compute offset into original buffer
   // current_location() points at the opening quote in the original buffer
   const char* loc = v.current_location();
   size_t offset = (loc - doc->buffer.data()) + 1;
-  
+
   // 3. Fast path: slice raw UTF-8 directly from original source
   mrb_value fast = mrb_str_substr(mrb, doc->source, offset, mrb_utf8_strlen(raw_start, raw_len));
-  
+
   // 4. Decode using simdjson (slow path)
   auto decoded = v.get_string();
   if (unlikely(decoded.error())) raise_simdjson_error_with_reparse(mrb, doc, decoded.error());
   auto dec = decoded.value();
-  
+
   // 5. Compare sizes
   if (dec.size() == raw_len) {
       return fast;
@@ -582,7 +615,7 @@ mrb_json_doc_get(mrb_state* mrb, mrb_value self)
   if (likely(!doc->need_to_reparse)) return doc;
 
   auto result = doc->parser.iterate(doc->buffer);
-  if (unlikely(result.error())) raise_simdjson_error_with_reparse(mrb, doc, result.error());
+  if (unlikely(result.error() != SUCCESS)) raise_simdjson_error_with_reparse(mrb, doc, result.error());
 
   doc->doc = std::move(result.value());
   doc->need_to_reparse = false;
@@ -601,6 +634,38 @@ mrb_json_doc_aref(mrb_state* mrb, mrb_value self)
   std::string_view k(RSTRING_PTR(key), RSTRING_LEN(key));
   ondemand::value val;
   auto err = doc->doc[k].get(val);
+  if (unlikely(err != SUCCESS)) raise_simdjson_error_with_reparse(mrb, doc, err);
+
+  return convert_ondemand_value_to_mrb(mrb, doc, val);
+}
+
+static mrb_value
+mrb_json_doc_find_field(mrb_state* mrb, mrb_value self)
+{
+  mrb_value key;
+  mrb_get_args(mrb, "S", &key);
+
+  auto* doc = mrb_json_doc_get(mrb, self);
+
+  std::string_view k(RSTRING_PTR(key), RSTRING_LEN(key));
+  ondemand::value val;
+  auto err = doc->doc.find_field(k).get(val);
+  if (unlikely(err != SUCCESS)) raise_simdjson_error_with_reparse(mrb, doc, err);
+
+  return convert_ondemand_value_to_mrb(mrb, doc, val);
+}
+
+static mrb_value
+mrb_json_doc_find_field_unordered(mrb_state* mrb, mrb_value self)
+{
+  mrb_value key;
+  mrb_get_args(mrb, "S", &key);
+
+  auto* doc = mrb_json_doc_get(mrb, self);
+
+  std::string_view k(RSTRING_PTR(key), RSTRING_LEN(key));
+  ondemand::value val;
+  auto err = doc->doc.find_field_unordered(k).get(val);
   if (unlikely(err != SUCCESS)) raise_simdjson_error_with_reparse(mrb, doc, err);
 
   return convert_ondemand_value_to_mrb(mrb, doc, val);
@@ -702,6 +767,7 @@ mrb_json_doc_array_each(mrb_state* mrb, mrb_value self)
       mrb_ary_push(mrb, ary, ruby_val);
       mrb_gc_arena_restore(mrb, arena);
     }
+    return ary;
   }
 
   return self;
@@ -713,7 +779,7 @@ mrb_json_doc_iterate(mrb_state* mrb, mrb_value self)
   auto* doc = mrb_cpp_get<mrb_json_doc>(mrb, self);
 
   auto result = doc->parser.iterate(doc->buffer);
-  if (unlikely(result.error())) raise_simdjson_error_with_reparse(mrb, doc, result.error());
+  if (unlikely(result.error() != SUCCESS)) raise_simdjson_error_with_reparse(mrb, doc, result.error());
   doc->doc = std::move(result.value());
 
   return self; // allow chaining
@@ -884,6 +950,57 @@ DEFINE_MRB_TO_JSON(mrb_false_to_json, json_encode_false(sb));
 DEFINE_MRB_TO_JSON(mrb_nil_to_json, json_encode_nil(sb));
 DEFINE_MRB_TO_JSON(mrb_symbol_to_json, json_encode_symbol(mrb, o, sb));
 
+static mrb_value
+mrb_json_parse_lazy(mrb_state *mrb, mrb_value self)
+{
+  mrb_value str;
+  mrb_get_args(mrb, "S", &str);
+
+  return mrb_obj_new(mrb, mrb_class_get_under_id(mrb, mrb_class_ptr(self), MRB_SYM(Document)), 1, &str);
+}
+
+MRB_API mrb_value
+mrb_json_load(mrb_state *mrb, mrb_value path_str, mrb_bool symbolize_names)
+{
+  std::string_view path(RSTRING_PTR(path_str), RSTRING_LEN(path_str));
+  auto res = padded_string::load(path);
+  if (unlikely(res.error() != SUCCESS)) {
+    mrb_sys_fail(mrb, "failed to read file");
+  }
+
+  dom::parser parser;
+  auto result = parser.parse(res.value());
+
+  if (unlikely(result.error() != SUCCESS)) {
+    raise_simdjson_error(mrb, result.error());
+  }
+
+  return convert_element(mrb, result.value(), symbolize_names);
+}
+
+static mrb_value
+mrb_json_load_m(mrb_state *mrb, mrb_value self)
+{
+  mrb_value path_str;
+  mrb_value kw_values[1] = {
+      mrb_undef_value()}; // default value for symbolize_names
+  mrb_sym kw_names[] = {MRB_SYM(symbolize_names)};
+  mrb_kwargs kwargs = {1, // num: number of keywords
+                       0, // required: none required
+                       kw_names, kw_values, NULL};
+
+  mrb_get_args(mrb, "S:", &path_str, &kwargs);
+
+  // Fallback default
+  mrb_bool symbolize_names = FALSE;
+  if (!mrb_undef_p(kw_values[0])) {
+    symbolize_names = mrb_bool(kw_values[0]); // cast to mrb_bool
+  }
+
+  return mrb_json_load(mrb, path_str, symbolize_names);
+}
+
+
 MRB_BEGIN_DECL
 void mrb_mruby_fast_json_gem_init(mrb_state *mrb) {
 
@@ -944,10 +1061,15 @@ void mrb_mruby_fast_json_gem_init(mrb_state *mrb) {
   DEFINE_JSON_ERROR(UnsupportedArchitecture);
   DEFINE_JSON_ERROR(Unexpected);
 
-  mrb_define_class_method_id(mrb, json_mod, MRB_SYM(parse), mrb_json_parse_m,
+  mrb_define_module_function_id(mrb, json_mod, MRB_SYM(parse), mrb_json_parse_m,
                              MRB_ARGS_REQ(1) | MRB_ARGS_KEY(1, 0));
-  mrb_define_class_method_id(mrb, json_mod, MRB_SYM(dump), mrb_json_dump_m,
+  mrb_define_module_function_id(mrb, json_mod, MRB_SYM(dump), mrb_json_dump_m,
                              MRB_ARGS_REQ(1));
+  mrb_define_module_function_id(mrb, json_mod, MRB_SYM(parse_lazy), mrb_json_parse_lazy,
+                             MRB_ARGS_REQ(1));
+  mrb_define_module_function_id(mrb, json_mod, MRB_SYM(load), mrb_json_load_m,
+                             MRB_ARGS_REQ(1) | MRB_ARGS_KEY(1, 0));
+
   mrb_define_method_id(mrb, mrb->object_class, MRB_SYM(to_json), mrb_json_dump,
                        MRB_ARGS_NONE());
   mrb_define_method_id(mrb, mrb->string_class, MRB_SYM(to_json),
@@ -980,6 +1102,10 @@ void mrb_mruby_fast_json_gem_init(mrb_state *mrb) {
                       mrb_json_doc_initialize, MRB_ARGS_REQ(1));
   mrb_define_method_id(mrb, doc, MRB_OPSYM(aref),
                       mrb_json_doc_aref, MRB_ARGS_REQ(1));
+  mrb_define_method_id(mrb, doc, MRB_SYM(find_field),
+                      mrb_json_doc_find_field, MRB_ARGS_REQ(1));
+  mrb_define_method_id(mrb, doc, MRB_SYM(find_field_unordered),
+                      mrb_json_doc_find_field_unordered, MRB_ARGS_REQ(1));
   mrb_define_method_id( mrb, doc, MRB_SYM(at),
                       mrb_json_doc_at, MRB_ARGS_REQ(1));
   mrb_define_method_id( mrb, doc, MRB_SYM(at_pointer),
@@ -992,7 +1118,6 @@ void mrb_mruby_fast_json_gem_init(mrb_state *mrb) {
                       mrb_json_doc_iterate, MRB_ARGS_NONE());
   mrb_define_method_id(mrb, doc, MRB_SYM(array_each),
                       mrb_json_doc_array_each, MRB_ARGS_BLOCK());
-                      mrb_value s = mrb_str_new_lit(mrb, "hello"); printf("%zu\n", RSTRING_CAPA(s)); // prints 0
 }
 
 void mrb_mruby_fast_json_gem_final(mrb_state *mrb) {}

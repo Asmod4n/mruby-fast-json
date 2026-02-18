@@ -1,11 +1,16 @@
 json_size = File.size("output.json")
-$json = File.read("output.json")
 JSON.zero_copy_parsing = true
+
 def measure_json_dump_performance(json_size)
-  # --- Parse once ---
+  # --- Load (bis doc fertig ist) ---
+  puts "Load start: #{Time.now}"
+  load_timer = Chrono::Timer.new
+  doc = JSON.load_lazy("output.json")
+  load_elapsed = load_timer.elapsed
+
+  # --- Parse / access (erste Nutzung) ---
   puts "Parse start: #{Time.now}"
   parse_timer = Chrono::Timer.new
-  doc = JSON.parse_lazy($json)
   data = doc.at(72972)
   parse_elapsed = parse_timer.elapsed
 
@@ -24,6 +29,11 @@ def measure_json_dump_performance(json_size)
   dump_elapsed = dump_timer.elapsed
 
   {
+    load: {
+      time: load_elapsed,
+      gbps: (json_size.to_f / load_elapsed) / 1_000_000_000,
+      ops_per_sec: 1.0 / load_elapsed
+    },
     parse: {
       time: parse_elapsed,
       gbps: (json_size.to_f / parse_elapsed) / 1_000_000_000,
@@ -40,7 +50,12 @@ end
 
 result = measure_json_dump_performance(json_size)
 
-puts "--- Parse (single) ---"
+puts "--- Load (JSON.load_lazy) ---"
+puts "Elapsed            : #{result[:load][:time].round(6)} seconds"
+puts "Throughput         : #{result[:load][:gbps].round(2)} GBps"
+puts "Ops/sec (1 load)   : #{result[:load][:ops_per_sec].round(2)}"
+
+puts "--- Parse (first access) ---"
 puts "Elapsed            : #{result[:parse][:time].round(6)} seconds"
 puts "Throughput         : #{result[:parse][:gbps].round(2)} GBps"
 puts "Ops/sec (1 parse)  : #{result[:parse][:ops_per_sec].round(2)}"
