@@ -682,16 +682,25 @@ mrb_json_doc_array_each(mrb_state* mrb, mrb_value self)
   auto arr = doc->doc.get_array();
   if (unlikely(arr.error())) raise_simdjson_error_with_reparse(mrb, doc, arr.error());
 
-  int arena = mrb_gc_arena_save(mrb);
-  for (ondemand::value v : arr.value()) {
-    mrb_value ruby_val = convert_ondemand_value_to_mrb(mrb, doc, v);
-    mrb_yield(mrb, block, ruby_val);
-    mrb_gc_arena_restore(mrb, arena);
+  if (mrb_proc_p(block)) {
+    int arena = mrb_gc_arena_save(mrb);
+    for (ondemand::value v : arr.value()) {
+      mrb_value ruby_val = convert_ondemand_value_to_mrb(mrb, doc, v);
+      mrb_yield(mrb, block, ruby_val);
+      mrb_gc_arena_restore(mrb, arena);
+    }
+  } else {
+    mrb_value ary = mrb_ary_new(mrb);
+    int arena = mrb_gc_arena_save(mrb);
+    for (ondemand::value v : arr.value()) {
+      mrb_value ruby_val = convert_ondemand_value_to_mrb(mrb, doc, v);
+      mrb_ary_push(mrb, ary, ruby_val);
+      mrb_gc_arena_restore(mrb, arena);
+    }
   }
 
   return self;
 }
-
 
 static mrb_value
 mrb_json_doc_iterate(mrb_state* mrb, mrb_value self)
