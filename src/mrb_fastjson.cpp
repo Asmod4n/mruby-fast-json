@@ -558,17 +558,21 @@ convert_string_from_ondemand(mrb_state* mrb, mrb_json_doc *doc, ondemand::value&
   }
   auto raw = raw_json.value();
 
-  // raw = "\"...\"" including quotes
-  const char* raw_start = raw.data() + 1;     // inside opening quote
-  size_t raw_len = raw.size() - 2;            // exclude both quotes
+  const char* loc = v.current_location();       // points at opening quote of value
+  const char* buf_start = doc->buffer.data();  // start of full JSON buffer
 
-  // 2. Compute offset into original buffer
-  // current_location() points at the opening quote in the original buffer
-  const char* loc = v.current_location();
-  size_t offset = (loc - doc->buffer.data()) + 1;
+  // number of bytes from start of buffer to opening quote
+  size_t byte_offset = loc - buf_start + 1;    // skip opening quote
 
-  // 3. Fast path: slice raw UTF-8 directly from original source
-  mrb_value fast = mrb_str_substr(mrb, doc->source, offset, mrb_utf8_strlen(raw_start, raw_len));
+  // calculate number of UTF-8 chars from the start of the source to value start
+  size_t char_offset = mrb_utf8_strlen(buf_start, byte_offset);
+
+  size_t raw_len = raw.size() - 2; // exclude quotes
+
+  // number of UTF-8 chars in value
+  size_t char_len = mrb_utf8_strlen(raw.data() + 1, raw_len);
+
+  mrb_value fast = mrb_str_substr(mrb, doc->source, char_offset, char_len);
 
   // 4. Decode using simdjson (slow path)
   auto decoded = v.get_string();
