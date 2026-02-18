@@ -319,14 +319,20 @@ static mrb_value mrb_json_parse_m(mrb_state *mrb, mrb_value self) {
 
 // ondemand API implementation
 struct mrb_json_doc {
-  mrb_value source;
   ondemand::parser parser;
   padded_string jsonbuffer;
   padded_string_view buffer;
   ondemand::document doc;
+  mrb_value source;
   bool need_to_reparse = false;
+
+  mrb_json_doc(mrb_state* mrb, mrb_value self, mrb_value str) {
+    buffer = simdjson_safe_view_from_mrb_string(mrb, str, jsonbuffer);
+    mrb_iv_set(mrb, self, MRB_SYM(source), str);
+    source = str;
+  }
 };
-MRB_CPP_DEFINE_TYPE(mrb_json_doc, mrb_json_doc_type)
+MRB_CPP_DEFINE_TYPE(mrb_json_doc, mrb_json_doc)
 
 static void
 raise_simdjson_error_with_reparse(mrb_state* mrb, mrb_json_doc* doc, error_code code)
@@ -341,14 +347,10 @@ mrb_json_doc_initialize(mrb_state* mrb, mrb_value self)
   mrb_value str;
   mrb_get_args(mrb, "S", &str);
 
-  auto* doc = mrb_cpp_new<mrb_json_doc>(mrb, self);
-  doc->buffer = simdjson_safe_view_from_mrb_string(mrb, str, doc->jsonbuffer);
-  mrb_iv_set(mrb, self, MRB_SYM(source), str);
-  doc->source = str;
+  auto* doc = mrb_cpp_new<mrb_json_doc>(mrb, self, mrb, self, str);
 
   auto result = doc->parser.iterate(doc->buffer);
   if (unlikely(result.error())) raise_simdjson_error_with_reparse(mrb, doc, result.error());
-
   doc->doc = std::move(result.value());
 
   return self;
@@ -527,9 +529,9 @@ convert_ondemand_value_to_mrb(mrb_state* mrb, mrb_json_doc *doc, ondemand::value
 
       auto json = v.raw_json();
       if (unlikely(json.error())) raise_simdjson_error_with_reparse(mrb, doc, json.error());
-      std::string_view sv = json.value();
+      size_t size = json.value().size();
 
-      return mrb_str_substr(mrb, doc->source, offset, mrb_utf8_strlen(start, sv.size()) - 2);
+      return mrb_str_substr(mrb, doc->source, offset, mrb_utf8_strlen(start, size) - 2);
     }
     case json_type::number:
       return convert_number_from_ondemand(mrb, doc, v);
@@ -542,7 +544,7 @@ convert_ondemand_value_to_mrb(mrb_state* mrb, mrb_json_doc *doc, ondemand::value
        mrb_raise(mrb, E_TYPE_ERROR, "unknown JSON type");
        break;
   }
-  return mrb_nil_value();
+  return mrb_undef_value();
 }
 
 static mrb_json_doc*
@@ -552,26 +554,24 @@ mrb_json_doc_get(mrb_state* mrb, mrb_value self)
   if (likely(!doc->need_to_reparse)) return doc;
 
   auto result = doc->parser.iterate(doc->buffer);
-  if (unlikely(result.error())) {
-    raise_simdjson_error_with_reparse(mrb, doc, result.error());
-  }
+  if (unlikely(result.error())) raise_simdjson_error_with_reparse(mrb, doc, result.error());
 
   doc->doc = std::move(result.value());
   doc->need_to_reparse = false;
+
   return doc;
 }
 
 static mrb_value
 mrb_json_doc_aref(mrb_state* mrb, mrb_value self)
 {
-  using namespace ondemand;
   mrb_value key;
   mrb_get_args(mrb, "S", &key);
 
   auto* doc = mrb_json_doc_get(mrb, self);
 
   std::string_view k(RSTRING_PTR(key), RSTRING_LEN(key));
-  value val;
+  ondemand::value val;
   auto err = doc->doc[k].get(val);
   if (unlikely(err != SUCCESS)) raise_simdjson_error_with_reparse(mrb, doc, err);
 
@@ -621,9 +621,7 @@ mrb_json_doc_at_path(mrb_state* mrb, mrb_value self)
 
   std::string_view json_path(RSTRING_PTR(path_val), RSTRING_LEN(path_val));
   auto vres = doc->doc.at_path(json_path);
-  if (vres.error()) {
-    raise_simdjson_error_with_reparse(mrb, doc, vres.error());
-  }
+  if (vres.error()) raise_simdjson_error_with_reparse(mrb, doc, vres.error());
 
   return convert_ondemand_value_to_mrb(mrb, doc, vres.value());
 }
@@ -639,9 +637,7 @@ mrb_json_doc_at_path_with_wildcard(mrb_state* mrb, mrb_value self)
   std::string_view json_path(RSTRING_PTR(path_val), RSTRING_LEN(path_val));
   std::vector<ondemand::value> values;
   auto error = doc->doc.at_path_with_wildcard(json_path).get(values);
-  if (error != SUCCESS) {
-    raise_simdjson_error_with_reparse(mrb, doc, error);
-  }
+  if (error != SUCCESS) raise_simdjson_error_with_reparse(mrb, doc, error);
 
   mrb_value ary = mrb_ary_new(mrb);
   int arena = mrb_gc_arena_save(mrb);
@@ -661,9 +657,7 @@ mrb_json_doc_array_each(mrb_state* mrb, mrb_value self)
 
   auto* doc = mrb_json_doc_get(mrb, self);
   auto arr = doc->doc.get_array();
-  if (unlikely(arr.error())) {
-    raise_simdjson_error_with_reparse(mrb, doc, arr.error());
-  }
+  if (unlikely(arr.error())) raise_simdjson_error_with_reparse(mrb, doc, arr.error());
 
   int arena = mrb_gc_arena_save(mrb);
   for (ondemand::value v : arr.value()) {
@@ -682,9 +676,7 @@ mrb_json_doc_iterate(mrb_state* mrb, mrb_value self)
   auto* doc = mrb_cpp_get<mrb_json_doc>(mrb, self);
 
   auto result = doc->parser.iterate(doc->buffer);
-  if (unlikely(result.error())) {
-    raise_simdjson_error_with_reparse(mrb, doc, result.error());
-  }
+  if (unlikely(result.error())) raise_simdjson_error_with_reparse(mrb, doc, result.error());
   doc->doc = std::move(result.value());
 
   return self; // allow chaining
