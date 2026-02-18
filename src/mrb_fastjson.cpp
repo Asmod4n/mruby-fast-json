@@ -54,9 +54,11 @@ static padded_string_view
 simdjson_safe_view_from_mrb_string(mrb_state *mrb, mrb_value str,
                                    padded_string &jsonbuffer) {
   size_t len = RSTRING_LEN(str);
-  if (likely(!need_allocation(RSTRING_PTR(str), len, RSTRING_CAPA(str)))) {
-    str = mrb_obj_freeze(mrb, str);
-    return padded_string_view(RSTRING_PTR(str), len, len + SIMDJSON_PADDING); // safe to parse in-place
+  if (mrb_test(mrb_iv_get(mrb, mrb_obj_value(mrb_module_get_id(mrb, MRB_SYM(JSON))), MRB_IVSYM(zero_copy_parsing)))) {
+    if (likely(!need_allocation(RSTRING_PTR(str), len, RSTRING_CAPA(str)))) {
+      str = mrb_obj_freeze(mrb, str);
+      return padded_string_view(RSTRING_PTR(str), len, len + SIMDJSON_PADDING);
+    }
   }
 
   if (mrb_frozen_p(mrb_obj_ptr(str))) {
