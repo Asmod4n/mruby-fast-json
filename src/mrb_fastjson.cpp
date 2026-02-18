@@ -516,6 +516,41 @@ convert_number_from_ondemand(mrb_state *mrb, mrb_json_doc *doc, ondemand::value&
 }
 
 static mrb_value
+convert_string_from_ondemand(mrb_state* mrb, mrb_json_doc *doc, ondemand::value& v)
+{
+  // 1. Get raw JSON slice (includes quotes + escapes)
+  auto raw_json = v.raw_json();
+  if (unlikely(raw_json.error())) {
+      raise_simdjson_error_with_reparse(mrb, doc, raw_json.error());
+  }
+  auto raw = raw_json.value();
+  
+  // raw = "\"...\"" including quotes
+  const char* raw_start = raw.data() + 1;     // inside opening quote
+  size_t raw_len = raw.size() - 2;            // exclude both quotes
+  
+  // 2. Compute offset into original buffer
+  // current_location() points at the opening quote in the original buffer
+  const char* loc = v.current_location();
+  size_t offset = (loc - doc->buffer.data()) + 1;
+  
+  // 3. Fast path: slice raw UTF-8 directly from original source
+  mrb_value fast = mrb_str_substr(mrb, doc->source, offset, mrb_utf8_strlen(raw_start, raw_len));
+  
+  // 4. Decode using simdjson (slow path)
+  auto decoded = v.get_string();
+  if (unlikely(decoded.error())) raise_simdjson_error_with_reparse(mrb, doc, decoded.error());
+  auto dec = decoded.value();
+  
+  // 5. Compare sizes
+  if (dec.size() == raw_len) {
+      return fast;
+  }
+  // 6. Escapes present → use decoded UTF-8
+  return mrb_str_new(mrb, dec.data(), dec.size());
+}
+
+static mrb_value
 convert_ondemand_value_to_mrb(mrb_state* mrb, mrb_json_doc *doc, ondemand::value& v)
 {
   using namespace ondemand;
@@ -524,38 +559,8 @@ convert_ondemand_value_to_mrb(mrb_state* mrb, mrb_json_doc *doc, ondemand::value
       return convert_ondemand_object(mrb, doc, v.get_object());
     case json_type::array:
       return convert_ondemand_array(mrb, doc, v.get_array());
-    case json_type::string: {
-        // 1. Get raw JSON slice (includes quotes + escapes)
-        auto raw_json = v.raw_json();
-        if (unlikely(raw_json.error())) {
-            raise_simdjson_error_with_reparse(mrb, doc, raw_json.error());
-        }
-        auto raw = raw_json.value();
-
-        // raw = "\"...\"" including quotes
-        const char* raw_start = raw.data() + 1;     // inside opening quote
-        size_t raw_len = raw.size() - 2;            // exclude both quotes
-
-        // 2. Compute offset into original buffer
-        // current_location() points at the opening quote in the original buffer
-        const char* loc = v.current_location();
-        size_t offset = (loc - doc->buffer.data()) + 1;
-
-        // 3. Fast path: slice raw UTF-8 directly from original source
-        mrb_value fast = mrb_str_substr(mrb, doc->source, offset, mrb_utf8_strlen(raw_start, raw_len));
-
-        // 4. Decode using simdjson (slow path)
-        auto decoded = v.get_string();
-        if (unlikely(decoded.error())) raise_simdjson_error_with_reparse(mrb, doc, decoded.error());
-        auto dec = decoded.value();
-
-        // 5. Compare sizes
-        if (dec.size() == raw_len) {
-            return fast;
-        }
-        // 6. Escapes present → use decoded UTF-8
-        return mrb_str_new(mrb, dec.data(), dec.size());
-    }
+    case json_type::string:
+      return convert_string_from_ondemand(mrb, doc, v);
     case json_type::number:
       return convert_number_from_ondemand(mrb, doc, v);
     case json_type::boolean:
