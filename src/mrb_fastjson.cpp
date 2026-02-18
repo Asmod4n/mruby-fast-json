@@ -339,8 +339,6 @@ mrb_json_doc_initialize(mrb_state* mrb, mrb_value self)
   mrb_value str;
   mrb_get_args(mrb, "S", &str);
 
-  mrb_iv_set(mrb, self, MRB_SYM(source), str);
-
   auto* doc = mrb_cpp_new<mrb_json_doc>(mrb, self);
   size_t len = RSTRING_LEN(str);
   if (likely(!need_allocation(RSTRING_PTR(str), len, RSTRING_CAPA(str)))) {
@@ -367,6 +365,7 @@ mrb_json_doc_initialize(mrb_state* mrb, mrb_value self)
     str = mrb_obj_freeze(mrb, str);
     doc->buffer = padded_string_view(RSTRING_PTR(str), len, RSTRING_CAPA(str));
   }
+  mrb_iv_set(mrb, self, MRB_SYM(source), str);
   doc->source = str;
 
   auto result = doc->parser.iterate(doc->buffer);
