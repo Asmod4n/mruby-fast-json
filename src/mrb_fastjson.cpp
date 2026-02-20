@@ -276,7 +276,6 @@ static void raise_simdjson_error(mrb_state *mrb, error_code code) {
     mrb_raise(mrb, E_JSON_UNEXPECTED_ERROR, msg);
     break;
 
-  case SUCCESS:
   default:
     mrb_raise(mrb, E_JSON_PARSER_ERROR, msg);
     break;
@@ -462,7 +461,7 @@ convert_big_integer_from_ondemand(mrb_state *mrb, mrb_json_doc *doc, ondemand::v
 
   // get raw token text (no allocation)
   auto raw_res = v.raw_json();
-  if (unlikely(raw_res.error())) raise_simdjson_error_with_reparse(mrb, doc, raw_res.error());
+  if (unlikely(raw_res.error() != SUCCESS)) raise_simdjson_error_with_reparse(mrb, doc, raw_res.error());
   std::string_view sv = raw_res.value();
 
   // strip sign if present in token text; rely on is_negative() for sign
@@ -514,24 +513,24 @@ convert_number_from_ondemand(mrb_state *mrb, mrb_json_doc *doc, ondemand::value&
   using namespace ondemand;
 
   auto nt_res = v.get_number_type();
-  if (unlikely(nt_res.error())) raise_simdjson_error_with_reparse(mrb, doc, nt_res.error());
+  if (unlikely(nt_res.error() != SUCCESS)) raise_simdjson_error_with_reparse(mrb, doc, nt_res.error());
 
   switch (nt_res.value()) {
     case number_type::unsigned_integer: {
       auto ures = v.get_uint64();
-      if (unlikely(ures.error())) raise_simdjson_error_with_reparse(mrb, doc, ures.error());
+      if (unlikely(ures.error() != SUCCESS)) raise_simdjson_error_with_reparse(mrb, doc, ures.error());
       return mrb_convert_number(mrb, static_cast<uint64_t>(ures.value()));
     }
 
     case number_type::signed_integer: {
       auto ires = v.get_int64();
-      if (unlikely(ires.error())) raise_simdjson_error_with_reparse(mrb, doc, ires.error());
+      if (unlikely(ires.error() != SUCCESS)) raise_simdjson_error_with_reparse(mrb, doc, ires.error());
       return mrb_convert_number(mrb, static_cast<int64_t>(ires.value()));
     }
 
     case number_type::floating_point_number: {
       auto dres = v.get_double();
-      if (unlikely(dres.error())) raise_simdjson_error_with_reparse(mrb, doc, dres.error());
+      if (unlikely(dres.error() != SUCCESS)) raise_simdjson_error_with_reparse(mrb, doc, dres.error());
       return mrb_convert_number(mrb, static_cast<double>(dres.value()));
     }
 
@@ -552,7 +551,7 @@ static mrb_value
 convert_string_from_ondemand(mrb_state* mrb, mrb_json_doc *doc, ondemand::value& v)
 {
   auto decoded = v.get_string();
-  if (unlikely(decoded.error())) raise_simdjson_error_with_reparse(mrb, doc, decoded.error());
+  if (unlikely(decoded.error() != SUCCESS)) raise_simdjson_error_with_reparse(mrb, doc, decoded.error());
   auto dec = decoded.value();
   const size_t dec_size = dec.size();
   if (RSTR_EMBEDDABLE_P(dec_size)) {
@@ -560,36 +559,34 @@ convert_string_from_ondemand(mrb_state* mrb, mrb_json_doc *doc, ondemand::value&
   }
   // 1. Get raw JSON slice (includes quotes + escapes)
   auto raw_json = v.raw_json();
-  if (unlikely(raw_json.error())) {
+  if (unlikely(raw_json.error() != SUCCESS)) {
       raise_simdjson_error_with_reparse(mrb, doc, raw_json.error());
   }
   auto raw = raw_json.value();
+  const size_t raw_len = raw.size() - 2; // exclude quotes
+  if (dec_size != raw_len) {
+      return mrb_str_new(mrb, dec.data(), dec_size);
+  }
 
   auto loc = v.current_location();       // points at opening quote of value
   if (unlikely(loc.error() != SUCCESS)) raise_simdjson_error_with_reparse(mrb, doc, loc.error());
   const char* buf_start = doc->buffer.data();  // start of full JSON buffer
 
   // number of bytes from start of buffer to opening quote
-  size_t byte_offset = loc.value() - buf_start + 1;    // skip opening quote
-  size_t raw_len = raw.size() - 2; // exclude quotes
+  const size_t byte_offset = loc.value() - buf_start + 1;    // skip opening quote
 
   // calculate number of UTF-8 chars from the start of the source to value start
-  size_t char_offset = mrb_utf8_strlen(buf_start, byte_offset);
+  const size_t char_offset = mrb_utf8_strlen(buf_start, byte_offset);
 
   // number of UTF-8 chars in value
-  size_t char_len = mrb_utf8_strlen(raw.data() + 1, raw_len);
+  const size_t char_len = mrb_utf8_strlen(raw.data() + 1, raw_len);
 
   mrb_value fast = mrb_str_substr(mrb, doc->source, char_offset, char_len);
   if (unlikely(!validate_utf8(RSTRING_PTR(fast), RSTRING_LEN(fast)))) {
     mrb_raise(mrb, E_JSON_UTF8_ERROR, "invalid utf-8 string");
   }
 
-  // 5. Compare sizes
-  if (dec_size == raw_len) {
-      return fast;
-  }
-  // 6. Escapes present → use decoded UTF-8
-  return mrb_str_new(mrb, dec.data(), dec_size);
+  return fast;
 }
 
 static mrb_value
@@ -705,7 +702,7 @@ mrb_json_doc_at_pointer(mrb_state* mrb, mrb_value self)
 
   std::string_view json_pointer(RSTRING_PTR(ptr_val), RSTRING_LEN(ptr_val));
   auto vres = doc->doc.at_pointer(json_pointer);
-  if (vres.error()) {
+  if (unlikely(vres.error() != SUCCESS)) {
     raise_simdjson_error_with_reparse(mrb, doc, vres.error());
   }
 
@@ -723,7 +720,7 @@ mrb_json_doc_at_path(mrb_state* mrb, mrb_value self)
 
   std::string_view json_path(RSTRING_PTR(path_val), RSTRING_LEN(path_val));
   auto vres = doc->doc.at_path(json_path);
-  if (vres.error()) raise_simdjson_error_with_reparse(mrb, doc, vres.error());
+  if (unlikely(vres.error() != SUCCESS)) raise_simdjson_error_with_reparse(mrb, doc, vres.error());
 
   return convert_ondemand_value_to_mrb(mrb, doc, vres.value());
 }
@@ -739,7 +736,7 @@ mrb_json_doc_at_path_with_wildcard(mrb_state* mrb, mrb_value self)
   std::string_view json_path(RSTRING_PTR(path_val), RSTRING_LEN(path_val));
   std::vector<ondemand::value> values;
   auto error = doc->doc.at_path_with_wildcard(json_path).get(values);
-  if (error != SUCCESS) raise_simdjson_error_with_reparse(mrb, doc, error);
+  if (unlikely(error != SUCCESS)) raise_simdjson_error_with_reparse(mrb, doc, error);
 
   mrb_value ary = mrb_ary_new(mrb);
   int arena = mrb_gc_arena_save(mrb);
@@ -759,7 +756,7 @@ mrb_json_doc_array_each(mrb_state* mrb, mrb_value self)
 
   auto* doc = mrb_json_doc_get(mrb, self);
   auto arr = doc->doc.get_array();
-  if (unlikely(arr.error())) raise_simdjson_error_with_reparse(mrb, doc, arr.error());
+  if (unlikely(arr.error() != SUCCESS)) raise_simdjson_error_with_reparse(mrb, doc, arr.error());
 
   if (mrb_proc_p(block)) {
     int arena = mrb_gc_arena_save(mrb);
