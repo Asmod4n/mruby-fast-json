@@ -550,43 +550,16 @@ convert_number_from_ondemand(mrb_state *mrb, mrb_json_doc *doc, ondemand::value&
 static mrb_value
 convert_string_from_ondemand(mrb_state* mrb, mrb_json_doc *doc, ondemand::value& v)
 {
+  using namespace ondemand;
   auto decoded = v.get_string();
-  if (unlikely(decoded.error() != SUCCESS)) raise_simdjson_error_with_reparse(mrb, doc, decoded.error());
+
+  // Decode normally
+  if (unlikely(decoded.error() != SUCCESS))
+    raise_simdjson_error_with_reparse(mrb, doc, decoded.error());
   auto dec = decoded.value();
-  const size_t dec_size = dec.size();
-  if (RSTR_EMBEDDABLE_P(dec_size)) {
-    return mrb_str_new(mrb, dec.data(), dec_size);
-  }
-  // 1. Get raw JSON slice (includes quotes + escapes)
-  auto raw_json = v.raw_json();
-  if (unlikely(raw_json.error() != SUCCESS)) {
-      raise_simdjson_error_with_reparse(mrb, doc, raw_json.error());
-  }
-  auto raw = raw_json.value();
-  const size_t raw_len = raw.size() - 2; // exclude quotes
-  if (dec_size != raw_len) {
-      return mrb_str_new(mrb, dec.data(), dec_size);
-  }
 
-  auto loc = v.current_location();       // points at opening quote of value
-  if (unlikely(loc.error() != SUCCESS)) raise_simdjson_error_with_reparse(mrb, doc, loc.error());
-  const char* buf_start = doc->buffer.data();  // start of full JSON buffer
+  return mrb_str_new(mrb, dec.data(), dec.size());
 
-  // number of bytes from start of buffer to opening quote
-  const size_t byte_offset = loc.value() - buf_start + 1;    // skip opening quote
-
-  // calculate number of UTF-8 chars from the start of the source to value start
-  const size_t char_offset = mrb_utf8_strlen(buf_start, byte_offset);
-
-  // number of UTF-8 chars in value
-  const size_t char_len = mrb_utf8_strlen(raw.data() + 1, raw_len);
-
-  mrb_value fast = mrb_str_substr(mrb, doc->source, char_offset, char_len);
-  if (unlikely(!validate_utf8(RSTRING_PTR(fast), RSTRING_LEN(fast)))) {
-    mrb_raise(mrb, E_JSON_UTF8_ERROR, "invalid utf-8 string");
-  }
-
-  return fast;
 }
 
 static mrb_value
@@ -612,6 +585,7 @@ convert_ondemand_value_to_mrb(mrb_state* mrb, mrb_json_doc *doc, ondemand::value
        break;
   }
   return mrb_undef_value();
+
 }
 
 static mrb_json_doc*
