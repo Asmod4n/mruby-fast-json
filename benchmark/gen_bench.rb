@@ -1,3 +1,4 @@
+#!/usr/bin/env ruby
 require 'json'
 
 File.open("output.json", "w") do |file|
@@ -7,7 +8,8 @@ File.open("output.json", "w") do |file|
   buffer = []
 
   while size < 10 * 1024 * 1024  # 10 MB
-    obj = { id: i, name: "Item #{i}", data: "x" * 100 }
+    obj = { id: i, meta: { a: 1, b: 2 }, data: "x" * 100_000 }
+
     json = JSON.dump(obj)
     buffer << json
     size += json.bytesize + 2  # account for comma + newline

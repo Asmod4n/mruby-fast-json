@@ -29,7 +29,7 @@ MRuby::Gem::Specification.new('mruby-fast-json') do |spec|
   spec.add_dependency 'mruby-chrono'
 
   unless spec.cxx.defines.include? 'MRB_DEBUG'
-    spec.cxx.flags << '-O3'
+    spec.cxx.flags << '-O3' << "-march=native"
     spec.cxx.defines << 'NDEBUG' << '__OPTIMIZE__=1'
   end
 
@@ -40,4 +40,6 @@ MRuby::Gem::Specification.new('mruby-fast-json') do |spec|
     #{simdjson_src}/simdjson.cpp
   )
   spec.objs += source_files.map { |f| f.relative_path_from(dir).pathmap("#{build_dir}/%X#{spec.exts.object}" ) }
+
+  spec.bins = %w(main)
 end
