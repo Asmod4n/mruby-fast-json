@@ -12,7 +12,7 @@ File.open("output.json", "w") do |file|
 
     json = JSON.dump(obj)
     buffer << json
-    size += json.bytesize + 2  # account for comma + newline
+    size += json.bytesize
     i += 1
   end
 

@@ -60,3 +60,4 @@ build_config.rb.lock
 compile_commands.json
 /.vscode/
 /.ccls-cache/
+benchmark/output.json

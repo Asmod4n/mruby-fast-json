@@ -40,6 +40,4 @@ MRuby::Gem::Specification.new('mruby-fast-json') do |spec|
     #{simdjson_src}/simdjson.cpp
   )
   spec.objs += source_files.map { |f| f.relative_path_from(dir).pathmap("#{build_dir}/%X#{spec.exts.object}" ) }
-
-  spec.bins = %w(main)
 end
