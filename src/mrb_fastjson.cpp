@@ -839,23 +839,30 @@ mrb_json_doc_get(mrb_state* mrb, mrb_value self)
   return nullptr;
 }
 
+static bool
+is_lookup_miss(simdjson::error_code err)
+{
+  return err == NO_SUCH_FIELD ||
+         err == OUT_OF_BOUNDS ||
+         err == INDEX_OUT_OF_BOUNDS ||
+         err == INCORRECT_TYPE;
+}
+
+
 static mrb_value
 mrb_json_doc_aref(mrb_state* mrb, mrb_value self)
 {
   mrb_value key;
   mrb_get_args(mrb, "S", &key);
 
-  auto *doc = mrb_json_doc_get(mrb, self);
+  auto *const doc = mrb_json_doc_get(mrb, self);
 
   std::string_view k(RSTRING_PTR(key), RSTRING_LEN(key));
   ondemand::value val;
   auto err = (*doc)[k].get(val);
   if (likely(err == SUCCESS)) return convert_ondemand_value_to_mrb(mrb, val);
 
-  // Treat "no such field" / out-of-bounds as missing -> return nil (Ruby-like [])
-  if (err == NO_SUCH_FIELD || err == OUT_OF_BOUNDS || err == INDEX_OUT_OF_BOUNDS) {
-    return mrb_nil_value();
-  }
+  if (is_lookup_miss(err))  return mrb_nil_value();
 
   raise_simdjson_error(mrb, err);
   return mrb_undef_value();
@@ -871,7 +878,7 @@ mrb_json_doc_fetch(mrb_state* mrb, mrb_value self)
   // accept any object as first arg, optional default, optional block
   mrb_get_args(mrb, "o|o&", &key_or_index, &default_val, &block);
 
-  auto *doc = mrb_json_doc_get(mrb, self);
+  auto *const doc = mrb_json_doc_get(mrb, self);
 
   // If first arg is an Integer -> array index path
   if (mrb_integer_p(key_or_index)) {
@@ -883,7 +890,7 @@ mrb_json_doc_fetch(mrb_state* mrb, mrb_value self)
       return convert_ondemand_value_to_mrb(mrb, val);
     }
 
-    if (err == INDEX_OUT_OF_BOUNDS || err == OUT_OF_BOUNDS) {
+    if (is_lookup_miss(err)) {
       if (!mrb_undef_p(default_val)) return default_val;
       if (mrb_proc_p(block)) return mrb_yield(mrb, block, key_or_index);
       mrb_raise(mrb, E_INDEX_ERROR, "index not found");
@@ -903,7 +910,7 @@ mrb_json_doc_fetch(mrb_state* mrb, mrb_value self)
     return convert_ondemand_value_to_mrb(mrb, val);
   }
 
-  if (err == NO_SUCH_FIELD || err == OUT_OF_BOUNDS || err == INDEX_OUT_OF_BOUNDS) {
+  if (is_lookup_miss(err)) {
     if (!mrb_undef_p(default_val)) return default_val;
     if (mrb_proc_p(block)) return mrb_yield(mrb, block, key_or_index);
     mrb_raise(mrb, E_KEY_ERROR, "key not found");
@@ -919,12 +926,14 @@ mrb_json_doc_find_field(mrb_state* mrb, mrb_value self)
   mrb_value key;
   mrb_get_args(mrb, "S", &key);
 
-  auto *doc = mrb_json_doc_get(mrb, self);
+  auto *const doc = mrb_json_doc_get(mrb, self);
 
   std::string_view k(RSTRING_PTR(key), RSTRING_LEN(key));
   ondemand::value val;
   const auto err = doc->find_field(k).get(val);
   if (likely(err == SUCCESS)) return convert_ondemand_value_to_mrb(mrb, val);
+
+  if (is_lookup_miss(err))  return mrb_nil_value();
 
   raise_simdjson_error(mrb, err);
   return mrb_undef_value(); // unreachable
@@ -936,12 +945,13 @@ mrb_json_doc_find_field_unordered(mrb_state* mrb, mrb_value self)
   mrb_value key;
   mrb_get_args(mrb, "S", &key);
 
-  auto *doc = mrb_json_doc_get(mrb, self);
+  auto *const doc = mrb_json_doc_get(mrb, self);
 
   std::string_view k(RSTRING_PTR(key), RSTRING_LEN(key));
   ondemand::value val;
   auto err = doc->find_field_unordered(k).get(val);
   if (likely(err == SUCCESS)) return convert_ondemand_value_to_mrb(mrb, val);
+  if (is_lookup_miss(err))  return mrb_nil_value();
 
   raise_simdjson_error(mrb, err);
   return mrb_undef_value(); // unreachable
@@ -953,7 +963,7 @@ mrb_json_doc_at(mrb_state* mrb, mrb_value self)
   mrb_int index;
   mrb_get_args(mrb, "i", &index);
 
-  auto *doc = mrb_json_doc_get(mrb, self);
+  auto *const doc = mrb_json_doc_get(mrb, self);
 
   ondemand::value val;
   const auto err = doc->at(index).get(val);
@@ -961,9 +971,7 @@ mrb_json_doc_at(mrb_state* mrb, mrb_value self)
     return convert_ondemand_value_to_mrb(mrb, val);
   }
 
-  if (unlikely(err == INDEX_OUT_OF_BOUNDS)) {
-    return mrb_nil_value();
-  }
+  if (is_lookup_miss(err))  return mrb_nil_value();
 
   raise_simdjson_error(mrb, err);
   return mrb_undef_value(); // unreachable
@@ -975,7 +983,7 @@ mrb_json_doc_at_pointer(mrb_state* mrb, mrb_value self)
   mrb_value ptr_val;
   mrb_get_args(mrb, "S", &ptr_val);
 
-  auto *doc = mrb_json_doc_get(mrb, self);
+  auto *const doc = mrb_json_doc_get(mrb, self);
 
   std::string_view json_pointer(RSTRING_PTR(ptr_val), RSTRING_LEN(ptr_val));
   auto vres = doc->at_pointer(json_pointer);
@@ -983,6 +991,8 @@ mrb_json_doc_at_pointer(mrb_state* mrb, mrb_value self)
     ondemand::value val = vres.value();
     return convert_ondemand_value_to_mrb(mrb, val);
   }
+
+  if (is_lookup_miss(vres.error()))  return mrb_nil_value();
 
   raise_simdjson_error(mrb, vres.error());
   return mrb_undef_value(); // unreachable
@@ -994,13 +1004,15 @@ mrb_json_doc_at_path(mrb_state* mrb, mrb_value self)
   mrb_value path_val;
   mrb_get_args(mrb, "S", &path_val);
 
-  auto *doc = mrb_json_doc_get(mrb, self);
+  auto *const doc = mrb_json_doc_get(mrb, self);
 
   std::string_view json_path(RSTRING_PTR(path_val), RSTRING_LEN(path_val));
   auto vres = doc->at_path(json_path);
   if (likely(vres.error() == SUCCESS)) {
     return convert_ondemand_value_to_mrb(mrb, vres.value());
   }
+
+  if (is_lookup_miss(vres.error()))  return mrb_nil_value();
 
   raise_simdjson_error(mrb, vres.error());
   return mrb_undef_value();
@@ -1012,12 +1024,12 @@ mrb_json_doc_at_path_with_wildcard(mrb_state* mrb, mrb_value self)
   mrb_value path_val;
   mrb_get_args(mrb, "S", &path_val);
 
-  auto *doc = mrb_json_doc_get(mrb, self);
+  auto *const doc = mrb_json_doc_get(mrb, self);
 
   std::string_view json_path(RSTRING_PTR(path_val), RSTRING_LEN(path_val));
   std::vector<ondemand::value> values;
-  auto error = doc->at_path_with_wildcard(json_path).get(values);
-  if (likely(error == SUCCESS)) {
+  auto err = doc->at_path_with_wildcard(json_path).get(values);
+  if (likely(err == SUCCESS)) {
     mrb_value ary = mrb_ary_new(mrb);
     int arena = mrb_gc_arena_save(mrb);
     for (auto v : values) {
@@ -1026,8 +1038,9 @@ mrb_json_doc_at_path_with_wildcard(mrb_state* mrb, mrb_value self)
     }
     return ary;
   }
+  if (is_lookup_miss(err))  return mrb_nil_value();
 
-  raise_simdjson_error(mrb, error);
+  raise_simdjson_error(mrb, err);
   return mrb_undef_value();
 }
 
@@ -1037,7 +1050,7 @@ mrb_json_doc_array_each(mrb_state* mrb, mrb_value self)
   mrb_value block = mrb_nil_value();
   mrb_get_args(mrb, "&", &block);
 
-  auto *doc = mrb_json_doc_get(mrb, self);
+  auto *const doc = mrb_json_doc_get(mrb, self);
   auto arr = doc->get_array();
   if (unlikely(arr.error() != SUCCESS)) raise_simdjson_error(mrb, arr.error());
 
@@ -1065,7 +1078,7 @@ mrb_json_doc_array_each(mrb_state* mrb, mrb_value self)
 static mrb_value
 mrb_json_doc_rewind(mrb_state* mrb, mrb_value self)
 {
-  auto *doc = mrb_cpp_get<ondemand::document>(mrb, self);
+  auto *const doc = mrb_cpp_get<ondemand::document>(mrb, self);
 
   doc->rewind();
 
@@ -1083,12 +1096,11 @@ mrb_json_doc_reiterate(mrb_state *mrb, mrb_value self)
 
   auto result = parser->iterate(*view);
   if (likely(result.error() == SUCCESS)) {
-    auto *doc_cpp = mrb_cpp_get<ondemand::document>(mrb, self);
+    auto *const doc_cpp = mrb_cpp_get<ondemand::document>(mrb, self);
     *doc_cpp = std::move(result.value());
 
     return self;
   }
-
 
   raise_simdjson_error(mrb, result.error());
   return mrb_undef_value();
@@ -1300,7 +1312,6 @@ mrb_json_load_m(mrb_state *mrb, mrb_value self)
   return mrb_json_load(mrb, path_str, symbolize_names);
 }
 
-
 MRB_BEGIN_DECL
 void mrb_mruby_fast_json_gem_init(mrb_state *mrb) {
 
@@ -1311,6 +1322,9 @@ void mrb_mruby_fast_json_gem_init(mrb_state *mrb) {
 #else
   pagesize = sysconf(_SC_PAGESIZE);
 #endif
+  if (pagesize < 1) {
+    mrb_bug(mrb, "got non positive pagesize");
+  }
 
   struct RClass *json_mod = mrb_define_module_id(mrb, MRB_SYM(JSON));
   auto impl = simdjson::get_active_implementation()->description();
