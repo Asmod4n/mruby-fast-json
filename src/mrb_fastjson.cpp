@@ -10,13 +10,18 @@
 #include <mruby/object.h>
 #include <mruby/presym.h>
 #include <mruby/string.h>
-#include <simdjson.h>
 #include <mruby/variable.h>
-#include <string_view>
 #include <mruby/error.h>
+#include <mruby/data.h>
 MRB_BEGIN_DECL
 #include <mruby/internal.h>
 MRB_END_DECL
+#include <string_view>
+#ifndef SIMDJSON_THREADS_ENABLED
+#define SIMDJSON_THREADS_ENABLED
+#endif
+#include <simdjson.h>
+
 using namespace simdjson;
 
 #ifdef _WIN32
@@ -31,9 +36,9 @@ static long pagesize;
 
 // Returns true if the buffer + len + simdjson::SIMDJSON_PADDING crosses the
 // page boundary.
-bool need_allocation(const char*  buf,
-                    size_t len,
-                    size_t capa)
+bool need_allocation(const char* buf,
+                    mrb_int len,
+                    mrb_int capa)
 {
 #ifdef MRB_DEBUG
   return true; // always allocate padded_string in debug mode to detect issues
@@ -56,7 +61,7 @@ bool need_allocation(const char*  buf,
 static padded_string_view
 simdjson_safe_view_from_mrb_string(mrb_state *mrb, mrb_value str,
                                    padded_string &jsonbuffer) {
-  size_t len = RSTRING_LEN(str);
+  mrb_int len = RSTRING_LEN(str);
   if (mrb_test(mrb_iv_get(mrb, mrb_obj_value(mrb_module_get_id(mrb, MRB_SYM(JSON))), MRB_IVSYM(zero_copy_parsing)))) {
     if (likely(!need_allocation(RSTRING_PTR(str), len, RSTRING_CAPA(str)))) {
       str = mrb_obj_freeze(mrb, str);
@@ -74,9 +79,9 @@ simdjson_safe_view_from_mrb_string(mrb_state *mrb, mrb_value str,
     mrb_raise(mrb, E_RUNTIME_ERROR, "JSON input too large for padding");
   }
 
-  size_t required = len + SIMDJSON_PADDING;
+  mrb_int required = len + SIMDJSON_PADDING;
 
-  if ((size_t)RSTRING_CAPA(str) < required) {
+  if (RSTRING_CAPA(str) < required) {
     // grow Ruby string to required bytes (len + padding)
     str = mrb_str_resize(mrb, str, required);
     str = mrb_obj_freeze(mrb, str);
@@ -144,13 +149,13 @@ static mrb_value convert_array(mrb_state *mrb, const dom::element& arr_el,
   return ary;
 }
 
-using KeyConverterFn = mrb_value (*)(mrb_state *, const std::string_view);
+using KeyConverterFn = mrb_value (*)(mrb_state *, std::string_view);
 
-static mrb_value convert_key_as_str(mrb_state *mrb, const std::string_view sv) {
+static mrb_value convert_key_as_str(mrb_state *mrb, std::string_view sv) {
   return mrb_str_new(mrb, sv.data(), sv.size());
 }
 
-static mrb_value convert_key_as_sym(mrb_state *mrb, const std::string_view sv) {
+static mrb_value convert_key_as_sym(mrb_state *mrb, std::string_view sv) {
   return mrb_symbol_value(mrb_intern(mrb, sv.data(), sv.size()));
 }
 
@@ -323,83 +328,295 @@ static mrb_value mrb_json_parse_m(mrb_state *mrb, mrb_value self) {
   return mrb_json_parse(mrb, str, symbolize_names);
 }
 
-// ondemand API implementation
-struct mrb_json_doc {
-  ondemand::parser parser;
-  padded_string jsonbuffer;
-  padded_string_view buffer;
-  ondemand::document doc;
-  mrb_value source;
-  bool need_to_reparse = false;
+#ifndef MRB_STR_LENGTH_MAX
+#define MRB_STR_LENGTH_MAX 1048576
+#endif
 
-  mrb_json_doc(mrb_state* mrb, mrb_value self, mrb_value str) {
-    buffer = simdjson_safe_view_from_mrb_string(mrb, str, jsonbuffer);
-    mrb_iv_set(mrb, self, MRB_SYM(source), str);
-    source = str;
-  }
+MRB_CPP_DEFINE_TYPE(ondemand::parser, ondemand_parser);
+MRB_CPP_DEFINE_TYPE(padded_string, padded_string);
+MRB_CPP_DEFINE_TYPE(padded_string_view, padded_string_view);
+MRB_CPP_DEFINE_TYPE(ondemand::document, ondemand_document);
 
-  mrb_json_doc(mrb_state* mrb, mrb_value self, padded_string&& filebuf)
-  {
-    jsonbuffer = std::move(filebuf);
-    buffer = padded_string_view(jsonbuffer);
-    source = mrb_obj_freeze(mrb, mrb_str_new_static(mrb, jsonbuffer.data(), jsonbuffer.size()));
-    mrb_iv_set(mrb, self, MRB_SYM(source), source);
-  }
-
-};
-MRB_CPP_DEFINE_TYPE(mrb_json_doc, mrb_json_doc)
-
-static void
-raise_simdjson_error_with_reparse(mrb_state* mrb, mrb_json_doc* const doc, const error_code code)
+static mrb_value
+make_padded_string_view_from_ruby_str(mrb_state *mrb, mrb_value str)
 {
-  doc->need_to_reparse = true;
-  raise_simdjson_error(mrb, code);
+  struct RClass *json_mod = mrb_module_get_id(mrb, MRB_SYM(JSON));
+  mrb_value zero_copy  = mrb_iv_get(mrb, mrb_obj_value(json_mod), MRB_IVSYM(zero_copy_parsing));
+
+  mrb_int len = RSTRING_LEN(str);
+
+  mrb_value argv[] = {mrb_undef_value(), mrb_undef_value()};
+  mrb_int argc = 0;
+
+  if (mrb_test(zero_copy) && likely(!need_allocation(RSTRING_PTR(str), len, RSTRING_CAPA(str)))) {
+    argv[0] = mrb_obj_freeze(mrb, str);
+    argv[1] = mrb_convert_number(mrb, len + SIMDJSON_PADDING);
+    argc = 2;
+
+  } else if (mrb_frozen_p(mrb_obj_ptr(str))) {
+    argv[0] = mrb_obj_new(
+      mrb,
+      mrb_class_get_under_id(mrb, json_mod, MRB_SYM(PaddedString)),
+      1, &str
+    );
+    argc = 1;
+
+  } else if (unlikely(len > SIZE_MAX - SIMDJSON_PADDING)) {
+    mrb_raise(mrb, E_RUNTIME_ERROR, "JSON input too large for padding");
+  } else {
+    mrb_int required = len + SIMDJSON_PADDING;
+
+    if (RSTRING_CAPA(str) < required) {
+      str = mrb_str_resize(mrb, str, required);
+      str = mrb_obj_freeze(mrb, str);
+      RSTR_SET_LEN(RSTRING(str), len);
+    }
+
+    argv[0] = str;
+    argc = 1;
+  }
+
+  return mrb_obj_new(
+    mrb,
+    mrb_class_get_under_id(mrb, json_mod, MRB_SYM(PaddedStringView)),
+    argc, argv
+  );
 }
 
 static mrb_value
-mrb_json_doc_initialize(mrb_state* mrb, mrb_value self)
+mrb_ondemand_parser_initialize(mrb_state *mrb, mrb_value self)
 {
-  mrb_value str;
-  mrb_value kw_values[1] = { mrb_undef_value() };
-  mrb_sym kw_names[] = { MRB_SYM(load) };
-  mrb_kwargs kwargs = { 1, 0, kw_names, kw_values, NULL };
+  mrb_int max_capacity = SIMDJSON_MAXSIZE_BYTES;
 
-  // Accept: Document.new(arg, load: true/false)
-  mrb_get_args(mrb, "S:", &str, &kwargs);
+  mrb_get_args(mrb, "|i", &max_capacity);
 
-  mrb_bool load_from_file = FALSE;
-  if (!mrb_undef_p(kw_values[0])) {
-    load_from_file = mrb_bool(kw_values[0]);
-  }
-
-  mrb_json_doc* doc = nullptr;
-  if (load_from_file) {
-    // --- EXPLICIT FILE LOAD ---
-    std::string_view path(RSTRING_PTR(str), RSTRING_LEN(str));
-    auto res = padded_string::load(path);
-    if (unlikely(res.error() != SUCCESS)) {
-      mrb_sys_fail(mrb, "failed to read file");
-    }
-    doc = mrb_cpp_new<mrb_json_doc>(
-      mrb, self, mrb, self,
-      std::move(res.value())
-    );
-  } else {
-    // --- EXPLICIT STRING PARSE ---
-    doc = mrb_cpp_new<mrb_json_doc>(mrb, self, mrb, self, str);
-  }
-
-  auto result = doc->parser.iterate(doc->buffer);
-  if (unlikely(result.error() != SUCCESS)) raise_simdjson_error_with_reparse(mrb, doc, result.error());
-  doc->doc = std::move(result.value());
+  mrb_cpp_new<ondemand::parser>(mrb, self, max_capacity);
 
   return self;
 }
 
-static mrb_value convert_ondemand_value_to_mrb(mrb_state* mrb, mrb_json_doc * const doc, ondemand::value& v);
+static mrb_value
+mrb_ondemand_parser_allocate(mrb_state *mrb, mrb_value self)
+{
+  mrb_int new_capacity  = MRB_STR_LENGTH_MAX;
+  mrb_int new_max_depth = DEFAULT_MAX_DEPTH;
+  mrb_get_args(mrb, "|i", &new_capacity, new_max_depth);
+
+  auto err = mrb_cpp_get<ondemand::parser>(mrb, self)->allocate(new_capacity, new_max_depth);
+  if (likely(err == SUCCESS)) return self;
+
+  raise_simdjson_error(mrb, err);
+  return mrb_undef_value();
+}
 
 static mrb_value
-convert_ondemand_array(mrb_state* mrb, mrb_json_doc * const doc, ondemand::array arr)
+mrb_ondemand_parser_iterate(mrb_state *mrb, mrb_value self)
+{
+  mrb_value arg;
+  mrb_get_args(mrb, "S", &arg);
+
+  mrb_value view_obj = make_padded_string_view_from_ruby_str(mrb, arg);
+  struct RClass *json_mod = mrb_module_get_id(mrb, MRB_SYM(JSON));
+  struct RClass *doc_cls =
+    mrb_class_get_under_id(mrb, json_mod, MRB_SYM(Document));
+  mrb_value args[2] = { view_obj, self };
+  return mrb_obj_new(mrb, doc_cls, 2, args);
+}
+
+static mrb_value
+mrb_padded_string_initialize(mrb_state *mrb, mrb_value self)
+{
+  mrb_value buf;
+  mrb_int argc = mrb_get_args(mrb, "|S", &buf);
+  if (argc == 0) {
+    mrb_cpp_new<padded_string>(mrb, self);
+    return self;
+  }
+
+  mrb_cpp_new<padded_string>(
+    mrb,
+    self,
+    RSTRING_PTR(buf),
+    RSTRING_LEN(buf)
+  );
+
+  return self;
+}
+
+static mrb_value
+mrb_padded_string_s_load(mrb_state *mrb, mrb_value self)
+{
+  mrb_value path;
+  mrb_get_args(mrb, "S", &path);
+
+  std::string_view sv(RSTRING_PTR(path), RSTRING_LEN(path));
+
+  // 1. Load padded_string from file
+  padded_string loaded = padded_string::load(sv);
+
+  // 2. Create Ruby PaddedString object to own the buffer
+  struct RClass *json_mod = mrb_module_get_id(mrb, MRB_SYM(JSON));
+  struct RClass *ps_class = mrb_class_ptr(self);
+
+  mrb_value ps_obj = mrb_obj_new(mrb, ps_class, 0, NULL);
+  auto *ps = mrb_cpp_get<padded_string>(mrb, ps_obj);
+  *ps = std::move(loaded);
+
+  // 3. Create padded_string_view from the padded_string
+  padded_string_view psv(*ps);
+
+  // 4. Create Ruby PaddedStringView object
+  struct RClass *psv_class =
+    mrb_class_get_under_id(mrb, json_mod, MRB_SYM(PaddedStringView));
+
+  mrb_value view_obj = mrb_obj_new(mrb, psv_class, 0, NULL);
+  auto *view_cpp = mrb_cpp_get<padded_string_view>(mrb, view_obj);
+  *view_cpp = std::move(psv);
+
+  // 5. Store the padded_string inside the view for lifetime safety
+  mrb_iv_set(mrb, view_obj, MRB_SYM(buf), ps_obj);
+
+  return view_obj;
+}
+
+static mrb_value
+mrb_padded_string_view_initialize(mrb_state *mrb, mrb_value self)
+{
+  mrb_value buf = mrb_undef_value();
+  mrb_int capa = 0;
+  mrb_int argc = mrb_get_args(mrb, "|oi", &buf, &capa);
+
+  if (argc == 0) {
+    mrb_cpp_new<padded_string_view>(mrb, self);
+    return self;
+  }
+
+  if (mrb_string_p(buf)) {
+    mrb_cpp_new<padded_string_view>(
+        mrb, self,
+        RSTRING_PTR(buf),
+        RSTRING_LEN(buf),
+        argc == 1 ? RSTRING_CAPA(buf) : capa);
+  } else {
+    auto *ps = mrb_cpp_get<padded_string>(mrb, buf);
+    auto psv = padded_string_view(*ps);
+    mrb_cpp_new<padded_string_view>(
+      mrb, self,
+      std::move(psv)
+    );
+  }
+
+  mrb_iv_set(mrb, self, MRB_SYM(buf), buf);
+
+  return self;
+}
+
+static mrb_value
+mrb_json_doc_initialize(mrb_state *mrb, mrb_value self)
+{
+  mrb_value view_obj;
+  mrb_value parser_obj = mrb_nil_value();
+
+  mrb_get_args(mrb, "o|o", &view_obj, &parser_obj);
+  auto *view = mrb_cpp_get<padded_string_view>(mrb, view_obj);
+
+  struct RClass *json_mod = mrb_module_get_id(mrb, MRB_SYM(JSON));
+  // If parser not provided, create one
+  if (mrb_nil_p(parser_obj)) {
+    parser_obj = mrb_obj_new(
+      mrb,
+      mrb_class_get_under_id(mrb, json_mod, MRB_SYM(Parser)),
+      0, NULL
+    );
+  }
+
+  auto *parser = mrb_cpp_get<ondemand::parser>(mrb, parser_obj);
+
+  auto result = parser->iterate(*view);
+  if (likely(result.error() == SUCCESS)) {
+    mrb_cpp_new<ondemand::document>(mrb, self, std::move(result.value()));
+
+    // Store Ruby ivars for rehydration later
+    mrb_iv_set(mrb, self, MRB_SYM(view), view_obj);
+    mrb_iv_set(mrb, self, MRB_SYM(parser), parser_obj);
+
+    return self;
+  }
+  raise_simdjson_error(mrb, result.error());
+  return mrb_undef_value();
+}
+
+static mrb_value
+mrb_json_parse_lazy(mrb_state *mrb, mrb_value self)
+{
+  mrb_value str;
+  mrb_value parser_obj = mrb_nil_value();
+  mrb_get_args(mrb, "S|o", &str, &parser_obj);
+
+  struct RClass *json_mod = mrb_class_ptr(self);
+
+  // 1. Build padded_string_view from Ruby string
+  mrb_value view_obj = make_padded_string_view_from_ruby_str(mrb, str);
+
+  // 2. Create Parser
+  if (mrb_nil_p(parser_obj)) {
+    parser_obj = mrb_obj_new(
+      mrb,
+      mrb_class_get_under_id(mrb, json_mod, MRB_SYM(Parser)),
+      0, NULL
+    );
+  }
+
+  // 3. Create Document(view, parser)
+  mrb_value args[2] = { view_obj, parser_obj };
+  return mrb_obj_new(
+    mrb,
+    mrb_class_get_under_id(mrb, json_mod, MRB_SYM(Document)),
+    2, args
+  );
+}
+
+static mrb_value
+mrb_json_load_lazy(mrb_state *mrb, mrb_value self)
+{
+  mrb_value path;
+  mrb_value parser_obj = mrb_nil_value();
+  mrb_get_args(mrb, "S|o", &path, &parser_obj);
+
+  struct RClass *json_mod = mrb_class_ptr(self);
+
+  // 1. Load padded_string_view from file
+  mrb_value view_obj = mrb_funcall_id(
+    mrb,
+    mrb_obj_value(mrb_class_get_under_id(mrb, json_mod, MRB_SYM(PaddedString))),
+    MRB_SYM(load),
+    1,
+    path
+  );
+
+  // 2. Create Parser if none provided
+  if (mrb_nil_p(parser_obj)) {
+    parser_obj = mrb_obj_new(
+      mrb,
+      mrb_class_get_under_id(mrb, json_mod, MRB_SYM(Parser)),
+      0, NULL
+    );
+  }
+
+  // 3. Create Document(view, parser)
+  mrb_value args[2] = { view_obj, parser_obj };
+  return mrb_obj_new(
+    mrb,
+    mrb_class_get_under_id(mrb, json_mod, MRB_SYM(Document)),
+    2, args
+  );
+}
+
+
+static mrb_value convert_ondemand_value_to_mrb(mrb_state* mrb, ondemand::value& v);
+
+static mrb_value
+convert_ondemand_array(mrb_state* mrb, ondemand::array arr)
 {
   mrb_value ary = mrb_ary_new(mrb);
   if (arr.is_empty()) {
@@ -407,14 +624,14 @@ convert_ondemand_array(mrb_state* mrb, mrb_json_doc * const doc, ondemand::array
   }
   int arena = mrb_gc_arena_save(mrb);
   for (ondemand::value val : arr) {
-    mrb_ary_push(mrb, ary, convert_ondemand_value_to_mrb(mrb, doc, val));
+    mrb_ary_push(mrb, ary, convert_ondemand_value_to_mrb(mrb, val));
     mrb_gc_arena_restore(mrb, arena);
   }
   return ary;
 }
 
 static mrb_value
-convert_ondemand_object(mrb_state* mrb, mrb_json_doc * const doc, ondemand::object obj)
+convert_ondemand_object(mrb_state* mrb, ondemand::object obj)
 {
   mrb_value hash = mrb_hash_new(mrb);
   if (obj.is_empty()) {
@@ -422,10 +639,10 @@ convert_ondemand_object(mrb_state* mrb, mrb_json_doc * const doc, ondemand::obje
   }
   int arena = mrb_gc_arena_save(mrb);
   for (auto field : obj) {
-    const std::string_view k = field.unescaped_key();
+    std::string_view k = field.unescaped_key();
     ondemand::value v = field.value();
     mrb_value key = mrb_str_new(mrb, k.data(), k.size());
-    mrb_value val = convert_ondemand_value_to_mrb(mrb, doc, v);
+    mrb_value val = convert_ondemand_value_to_mrb(mrb, v);
     mrb_hash_set(mrb, hash, key, val);
     mrb_gc_arena_restore(mrb, arena);
   }
@@ -433,7 +650,7 @@ convert_ondemand_object(mrb_state* mrb, mrb_json_doc * const doc, ondemand::obje
 }
 
 #if defined(__SIZEOF_INT128__)
-static bool parse_decimal_to_u128(const std::string_view digits, unsigned __int128 &out) {
+static bool parse_decimal_to_u128(std::string_view digits, unsigned __int128 &out) {
   const size_t len = digits.size();
   if (len == 0 || len > 39) return false;
 
@@ -457,15 +674,15 @@ static bool parse_decimal_to_u128(const std::string_view digits, unsigned __int1
 }
 
 static mrb_value
-convert_big_integer_from_ondemand(mrb_state *mrb, mrb_json_doc * const doc, ondemand::value& v)
+convert_big_integer_from_ondemand(mrb_state *mrb, ondemand::value& v)
 {
   // sign (cheap)
   const auto negative = v.is_negative();
 
   // get raw token text (no allocation)
   auto raw_res = v.raw_json();
-  if (unlikely(raw_res.error() != SUCCESS)) raise_simdjson_error_with_reparse(mrb, doc, raw_res.error());
-  const std::string_view sv = raw_res.value();
+  if (unlikely(raw_res.error() != SUCCESS)) raise_simdjson_error(mrb, raw_res.error());
+  std::string_view sv = raw_res.value();
 
   // strip sign if present in token text; rely on is_negative() for sign
   size_t pos = 0;
@@ -511,37 +728,42 @@ convert_big_integer_from_ondemand(mrb_state *mrb, mrb_json_doc * const doc, onde
 #endif // __SIZEOF_INT128__
 
 static mrb_value
-convert_number_from_ondemand(mrb_state *mrb, mrb_json_doc * const doc, ondemand::value& v)
+convert_number_from_ondemand(mrb_state *mrb, ondemand::value& v)
 {
   using namespace ondemand;
 
   auto nt_res = v.get_number_type();
-  if (unlikely(nt_res.error() != SUCCESS)) raise_simdjson_error_with_reparse(mrb, doc, nt_res.error());
+  if (unlikely(nt_res.error() != SUCCESS)) raise_simdjson_error(mrb, nt_res.error());
 
   switch (nt_res.value()) {
-    case number_type::unsigned_integer: {
-      auto ures = v.get_uint64();
-      if (unlikely(ures.error() != SUCCESS)) raise_simdjson_error_with_reparse(mrb, doc, ures.error());
-      return mrb_convert_number(mrb, static_cast<uint64_t>(ures.value()));
-    }
-
-    case number_type::signed_integer: {
-      auto ires = v.get_int64();
-      if (unlikely(ires.error() != SUCCESS)) raise_simdjson_error_with_reparse(mrb, doc, ires.error());
-      return mrb_convert_number(mrb, static_cast<int64_t>(ires.value()));
-    }
-
     case number_type::floating_point_number: {
       auto dres = v.get_double();
-      if (unlikely(dres.error() != SUCCESS)) raise_simdjson_error_with_reparse(mrb, doc, dres.error());
-      return mrb_convert_number(mrb, static_cast<double>(dres.value()));
+      if (likely(dres.error() == SUCCESS)) {
+        return mrb_convert_number(mrb, static_cast<double>(dres.value()));
+      }
+      raise_simdjson_error(mrb, dres.error());
+    }
+    case number_type::signed_integer: {
+      auto ires = v.get_int64();
+      if (likely(ires.error() == SUCCESS)) {
+        return mrb_convert_number(mrb, static_cast<int64_t>(ires.value()));
+      }
+      raise_simdjson_error(mrb, ires.error());
+    }
+
+    case number_type::unsigned_integer: {
+      auto ures = v.get_uint64();
+      if (likely(ures.error() == SUCCESS)) {
+        return mrb_convert_number(mrb, static_cast<uint64_t>(ures.value()));
+      }
+      raise_simdjson_error(mrb, ures.error());
     }
 
     case number_type::big_integer: {
 #if !defined(__SIZEOF_INT128__)
       mrb_raise(mrb, E_JSON_BIGINT_ERROR, "128 bit integers are not supported");
 #else
-      return convert_big_integer_from_ondemand(mrb, doc, v);
+      return convert_big_integer_from_ondemand(mrb, v);
 #endif
     }
 
@@ -551,31 +773,33 @@ convert_number_from_ondemand(mrb_state *mrb, mrb_json_doc * const doc, ondemand:
 }
 
 static mrb_value
-convert_string_from_ondemand(mrb_state* mrb, mrb_json_doc * const doc, ondemand::value& v)
+convert_string_from_ondemand(mrb_state* mrb, ondemand::value& v)
 {
   auto decoded = v.get_string();
 
-  if (unlikely(decoded.error() != SUCCESS))
-    raise_simdjson_error_with_reparse(mrb, doc, decoded.error());
-  auto dec = decoded.value();
+  if (likely(decoded.error() == SUCCESS)) {
+    auto dec = decoded.value();
 
-  return mrb_str_new(mrb, dec.data(), dec.size());
+    return mrb_str_new(mrb, dec.data(), dec.size());
+  }
 
+  raise_simdjson_error(mrb, decoded.error());
+  return mrb_undef_value();
 }
 
 static mrb_value
-convert_ondemand_value_to_mrb(mrb_state* mrb, mrb_json_doc * const doc, ondemand::value& v)
+convert_ondemand_value_to_mrb(mrb_state* mrb, ondemand::value& v)
 {
   using namespace ondemand;
   switch (v.type()) {
     case json_type::object:
-      return convert_ondemand_object(mrb, doc, v.get_object());
+      return convert_ondemand_object(mrb, v.get_object());
     case json_type::array:
-      return convert_ondemand_array(mrb, doc, v.get_array());
+      return convert_ondemand_array(mrb, v.get_array());
     case json_type::string:
-      return convert_string_from_ondemand(mrb, doc, v);
+      return convert_string_from_ondemand(mrb, v);
     case json_type::number:
-      return convert_number_from_ondemand(mrb, doc, v);
+      return convert_number_from_ondemand(mrb, v);
     case json_type::boolean:
       return mrb_bool_value(v.get_bool());
     case json_type::null:
@@ -589,19 +813,30 @@ convert_ondemand_value_to_mrb(mrb_state* mrb, mrb_json_doc * const doc, ondemand
 
 }
 
-static mrb_json_doc*
+static ondemand::document*
 mrb_json_doc_get(mrb_state* mrb, mrb_value self)
 {
-  auto* const doc = mrb_cpp_get<mrb_json_doc>(mrb, self);
-  if (likely(!doc->need_to_reparse)) return doc;
+  ondemand::document *doc = mrb_cpp_get<ondemand::document>(mrb, self);
 
-  auto result = doc->parser.iterate(doc->buffer);
-  if (unlikely(result.error() != SUCCESS)) raise_simdjson_error_with_reparse(mrb, doc, result.error());
+  if (likely(doc->is_alive())) {
+    return doc;
+  }
 
-  doc->doc = std::move(result.value());
-  doc->need_to_reparse = false;
+  mrb_value view_obj   = mrb_iv_get(mrb, self, MRB_SYM(view));
+  mrb_value parser_obj = mrb_iv_get(mrb, self, MRB_SYM(parser));
 
-  return doc;
+  auto *view   = mrb_cpp_get<padded_string_view>(mrb, view_obj);
+  auto *parser = mrb_cpp_get<ondemand::parser>(mrb, parser_obj);
+
+  auto result = parser->iterate(*view);
+  if (likely(result.error() == SUCCESS)) {
+    *doc = std::move(result.value());
+
+    return doc;
+  }
+
+  raise_simdjson_error(mrb, result.error());
+  return nullptr;
 }
 
 static mrb_value
@@ -610,14 +845,72 @@ mrb_json_doc_aref(mrb_state* mrb, mrb_value self)
   mrb_value key;
   mrb_get_args(mrb, "S", &key);
 
-  auto* const doc = mrb_json_doc_get(mrb, self);
+  auto *doc = mrb_json_doc_get(mrb, self);
 
-  const std::string_view k(RSTRING_PTR(key), RSTRING_LEN(key));
+  std::string_view k(RSTRING_PTR(key), RSTRING_LEN(key));
   ondemand::value val;
-  auto err = doc->doc[k].get(val);
-  if (unlikely(err != SUCCESS)) raise_simdjson_error_with_reparse(mrb, doc, err);
+  auto err = (*doc)[k].get(val);
+  if (likely(err == SUCCESS)) return convert_ondemand_value_to_mrb(mrb, val);
 
-  return convert_ondemand_value_to_mrb(mrb, doc, val);
+  // Treat "no such field" / out-of-bounds as missing -> return nil (Ruby-like [])
+  if (err == NO_SUCH_FIELD || err == OUT_OF_BOUNDS || err == INDEX_OUT_OF_BOUNDS) {
+    return mrb_nil_value();
+  }
+
+  raise_simdjson_error(mrb, err);
+  return mrb_undef_value();
+}
+
+static mrb_value
+mrb_json_doc_fetch(mrb_state* mrb, mrb_value self)
+{
+  mrb_value key_or_index;
+  mrb_value default_val = mrb_undef_value();
+  mrb_value block = mrb_nil_value();
+
+  // accept any object as first arg, optional default, optional block
+  mrb_get_args(mrb, "o|o&", &key_or_index, &default_val, &block);
+
+  auto *doc = mrb_json_doc_get(mrb, self);
+
+  // If first arg is an Integer -> array index path
+  if (mrb_integer_p(key_or_index)) {
+    mrb_int idx = mrb_integer(key_or_index);
+    ondemand::value val;
+    auto err = doc->at(static_cast<size_t>(idx)).get(val);
+
+    if (likely(err == SUCCESS)) {
+      return convert_ondemand_value_to_mrb(mrb, val);
+    }
+
+    if (err == INDEX_OUT_OF_BOUNDS || err == OUT_OF_BOUNDS) {
+      if (!mrb_undef_p(default_val)) return default_val;
+      if (mrb_proc_p(block)) return mrb_yield(mrb, block, key_or_index);
+      mrb_raise(mrb, E_INDEX_ERROR, "index not found");
+    }
+
+    raise_simdjson_error(mrb, err);
+    return mrb_undef_value(); // unreachable
+  }
+
+  // Otherwise treat as string key (convert to string view)
+  mrb_value key_str = mrb_obj_as_string(mrb, key_or_index);
+  std::string_view k(RSTRING_PTR(key_str), RSTRING_LEN(key_str));
+  ondemand::value val;
+  auto err = (*doc)[k].get(val);
+
+  if (likely(err == SUCCESS)) {
+    return convert_ondemand_value_to_mrb(mrb, val);
+  }
+
+  if (err == NO_SUCH_FIELD || err == OUT_OF_BOUNDS || err == INDEX_OUT_OF_BOUNDS) {
+    if (!mrb_undef_p(default_val)) return default_val;
+    if (mrb_proc_p(block)) return mrb_yield(mrb, block, key_or_index);
+    mrb_raise(mrb, E_KEY_ERROR, "key not found");
+  }
+
+  raise_simdjson_error(mrb, err);
+  return mrb_undef_value(); // unreachable
 }
 
 static mrb_value
@@ -626,14 +919,15 @@ mrb_json_doc_find_field(mrb_state* mrb, mrb_value self)
   mrb_value key;
   mrb_get_args(mrb, "S", &key);
 
-  auto* const doc = mrb_json_doc_get(mrb, self);
+  auto *doc = mrb_json_doc_get(mrb, self);
 
-  const std::string_view k(RSTRING_PTR(key), RSTRING_LEN(key));
+  std::string_view k(RSTRING_PTR(key), RSTRING_LEN(key));
   ondemand::value val;
-  const auto err = doc->doc.find_field(k).get(val);
-  if (unlikely(err != SUCCESS)) raise_simdjson_error_with_reparse(mrb, doc, err);
+  const auto err = doc->find_field(k).get(val);
+  if (likely(err == SUCCESS)) return convert_ondemand_value_to_mrb(mrb, val);
 
-  return convert_ondemand_value_to_mrb(mrb, doc, val);
+  raise_simdjson_error(mrb, err);
+  return mrb_undef_value(); // unreachable
 }
 
 static mrb_value
@@ -642,14 +936,15 @@ mrb_json_doc_find_field_unordered(mrb_state* mrb, mrb_value self)
   mrb_value key;
   mrb_get_args(mrb, "S", &key);
 
-  auto* const doc = mrb_json_doc_get(mrb, self);
+  auto *doc = mrb_json_doc_get(mrb, self);
 
-  const std::string_view k(RSTRING_PTR(key), RSTRING_LEN(key));
+  std::string_view k(RSTRING_PTR(key), RSTRING_LEN(key));
   ondemand::value val;
-  auto err = doc->doc.find_field_unordered(k).get(val);
-  if (unlikely(err != SUCCESS)) raise_simdjson_error_with_reparse(mrb, doc, err);
+  auto err = doc->find_field_unordered(k).get(val);
+  if (likely(err == SUCCESS)) return convert_ondemand_value_to_mrb(mrb, val);
 
-  return convert_ondemand_value_to_mrb(mrb, doc, val);
+  raise_simdjson_error(mrb, err);
+  return mrb_undef_value(); // unreachable
 }
 
 static mrb_value
@@ -658,13 +953,20 @@ mrb_json_doc_at(mrb_state* mrb, mrb_value self)
   mrb_int index;
   mrb_get_args(mrb, "i", &index);
 
-  auto* const doc = mrb_json_doc_get(mrb, self);
+  auto *doc = mrb_json_doc_get(mrb, self);
 
   ondemand::value val;
-  const auto err = doc->doc.at(index).get(val);
-  if (unlikely(err != SUCCESS)) raise_simdjson_error_with_reparse(mrb, doc, err);
+  const auto err = doc->at(index).get(val);
+  if (likely(err == SUCCESS)) {
+    return convert_ondemand_value_to_mrb(mrb, val);
+  }
 
-  return convert_ondemand_value_to_mrb(mrb, doc, val);
+  if (unlikely(err == INDEX_OUT_OF_BOUNDS)) {
+    return mrb_nil_value();
+  }
+
+  raise_simdjson_error(mrb, err);
+  return mrb_undef_value(); // unreachable
 }
 
 static mrb_value
@@ -673,16 +975,17 @@ mrb_json_doc_at_pointer(mrb_state* mrb, mrb_value self)
   mrb_value ptr_val;
   mrb_get_args(mrb, "S", &ptr_val);
 
-  auto* const doc = mrb_json_doc_get(mrb, self);
+  auto *doc = mrb_json_doc_get(mrb, self);
 
-  const std::string_view json_pointer(RSTRING_PTR(ptr_val), RSTRING_LEN(ptr_val));
-  auto vres = doc->doc.at_pointer(json_pointer);
-  if (unlikely(vres.error() != SUCCESS)) {
-    raise_simdjson_error_with_reparse(mrb, doc, vres.error());
+  std::string_view json_pointer(RSTRING_PTR(ptr_val), RSTRING_LEN(ptr_val));
+  auto vres = doc->at_pointer(json_pointer);
+  if (likely(vres.error() == SUCCESS)) {
+    ondemand::value val = vres.value();
+    return convert_ondemand_value_to_mrb(mrb, val);
   }
 
-  ondemand::value val = vres.value();
-  return convert_ondemand_value_to_mrb(mrb, doc, val);
+  raise_simdjson_error(mrb, vres.error());
+  return mrb_undef_value(); // unreachable
 }
 
 static mrb_value
@@ -691,13 +994,16 @@ mrb_json_doc_at_path(mrb_state* mrb, mrb_value self)
   mrb_value path_val;
   mrb_get_args(mrb, "S", &path_val);
 
-  auto* const doc = mrb_json_doc_get(mrb, self);
+  auto *doc = mrb_json_doc_get(mrb, self);
 
-  const std::string_view json_path(RSTRING_PTR(path_val), RSTRING_LEN(path_val));
-  auto vres = doc->doc.at_path(json_path);
-  if (unlikely(vres.error() != SUCCESS)) raise_simdjson_error_with_reparse(mrb, doc, vres.error());
+  std::string_view json_path(RSTRING_PTR(path_val), RSTRING_LEN(path_val));
+  auto vres = doc->at_path(json_path);
+  if (likely(vres.error() == SUCCESS)) {
+    return convert_ondemand_value_to_mrb(mrb, vres.value());
+  }
 
-  return convert_ondemand_value_to_mrb(mrb, doc, vres.value());
+  raise_simdjson_error(mrb, vres.error());
+  return mrb_undef_value();
 }
 
 static mrb_value
@@ -706,21 +1012,23 @@ mrb_json_doc_at_path_with_wildcard(mrb_state* mrb, mrb_value self)
   mrb_value path_val;
   mrb_get_args(mrb, "S", &path_val);
 
-  auto* const doc = mrb_json_doc_get(mrb, self);
+  auto *doc = mrb_json_doc_get(mrb, self);
 
-  const std::string_view json_path(RSTRING_PTR(path_val), RSTRING_LEN(path_val));
+  std::string_view json_path(RSTRING_PTR(path_val), RSTRING_LEN(path_val));
   std::vector<ondemand::value> values;
-  auto error = doc->doc.at_path_with_wildcard(json_path).get(values);
-  if (unlikely(error != SUCCESS)) raise_simdjson_error_with_reparse(mrb, doc, error);
-
-  mrb_value ary = mrb_ary_new(mrb);
-  int arena = mrb_gc_arena_save(mrb);
-  for (auto v : values) {
-    mrb_ary_push(mrb, ary, convert_ondemand_value_to_mrb(mrb, doc, v));
-    mrb_gc_arena_restore(mrb, arena);
+  auto error = doc->at_path_with_wildcard(json_path).get(values);
+  if (likely(error == SUCCESS)) {
+    mrb_value ary = mrb_ary_new(mrb);
+    int arena = mrb_gc_arena_save(mrb);
+    for (auto v : values) {
+      mrb_ary_push(mrb, ary, convert_ondemand_value_to_mrb(mrb, v));
+      mrb_gc_arena_restore(mrb, arena);
+    }
+    return ary;
   }
-  return ary;
 
+  raise_simdjson_error(mrb, error);
+  return mrb_undef_value();
 }
 
 static mrb_value
@@ -729,14 +1037,14 @@ mrb_json_doc_array_each(mrb_state* mrb, mrb_value self)
   mrb_value block = mrb_nil_value();
   mrb_get_args(mrb, "&", &block);
 
-  auto* const doc = mrb_json_doc_get(mrb, self);
-  auto arr = doc->doc.get_array();
-  if (unlikely(arr.error() != SUCCESS)) raise_simdjson_error_with_reparse(mrb, doc, arr.error());
+  auto *doc = mrb_json_doc_get(mrb, self);
+  auto arr = doc->get_array();
+  if (unlikely(arr.error() != SUCCESS)) raise_simdjson_error(mrb, arr.error());
 
   if (mrb_proc_p(block)) {
     int arena = mrb_gc_arena_save(mrb);
     for (ondemand::value v : arr.value()) {
-      mrb_value ruby_val = convert_ondemand_value_to_mrb(mrb, doc, v);
+      mrb_value ruby_val = convert_ondemand_value_to_mrb(mrb, v);
       mrb_yield(mrb, block, ruby_val);
       mrb_gc_arena_restore(mrb, arena);
     }
@@ -744,7 +1052,7 @@ mrb_json_doc_array_each(mrb_state* mrb, mrb_value self)
     mrb_value ary = mrb_ary_new(mrb);
     int arena = mrb_gc_arena_save(mrb);
     for (ondemand::value v : arr.value()) {
-      mrb_value ruby_val = convert_ondemand_value_to_mrb(mrb, doc, v);
+      mrb_value ruby_val = convert_ondemand_value_to_mrb(mrb, v);
       mrb_ary_push(mrb, ary, ruby_val);
       mrb_gc_arena_restore(mrb, arena);
     }
@@ -755,15 +1063,35 @@ mrb_json_doc_array_each(mrb_state* mrb, mrb_value self)
 }
 
 static mrb_value
-mrb_json_doc_iterate(mrb_state* mrb, mrb_value self)
+mrb_json_doc_rewind(mrb_state* mrb, mrb_value self)
 {
-  auto* const doc = mrb_cpp_get<mrb_json_doc>(mrb, self);
+  auto *doc = mrb_cpp_get<ondemand::document>(mrb, self);
 
-  auto result = doc->parser.iterate(doc->buffer);
-  if (unlikely(result.error() != SUCCESS)) raise_simdjson_error_with_reparse(mrb, doc, result.error());
-  doc->doc = std::move(result.value());
+  doc->rewind();
 
-  return self; // allow chaining
+  return self;
+}
+
+static mrb_value
+mrb_json_doc_reiterate(mrb_state *mrb, mrb_value self)
+{
+  mrb_value view_obj = mrb_iv_get(mrb, self, MRB_SYM(view));
+  mrb_value parser_obj = mrb_iv_get(mrb, self, MRB_SYM(parser));
+
+  auto *view   = mrb_cpp_get<padded_string_view>(mrb, view_obj);
+  auto *parser = mrb_cpp_get<ondemand::parser>(mrb, parser_obj);
+
+  auto result = parser->iterate(*view);
+  if (likely(result.error() == SUCCESS)) {
+    auto *doc_cpp = mrb_cpp_get<ondemand::document>(mrb, self);
+    *doc_cpp = std::move(result.value());
+
+    return self;
+  }
+
+
+  raise_simdjson_error(mrb, result.error());
+  return mrb_undef_value();
 }
 
 static inline void json_encode_nil(builder::string_builder &builder) {
@@ -897,7 +1225,7 @@ MRB_API mrb_value mrb_json_dump(mrb_state *mrb, mrb_value obj) {
   if (unlikely(!sb.validate_unicode())) {
     mrb_raise(mrb, E_JSON_UTF8_ERROR, "invalid utf-8");
   }
-  const std::string_view sv = sb.view();
+  std::string_view sv = sb.view();
   return mrb_str_new(mrb, sv.data(), sv.size());
 }
 
@@ -931,19 +1259,10 @@ DEFINE_MRB_TO_JSON(mrb_false_to_json, json_encode_false(sb));
 DEFINE_MRB_TO_JSON(mrb_nil_to_json, json_encode_nil(sb));
 DEFINE_MRB_TO_JSON(mrb_symbol_to_json, json_encode_symbol(mrb, o, sb));
 
-static mrb_value
-mrb_json_parse_lazy(mrb_state *mrb, mrb_value self)
-{
-  mrb_value str;
-  mrb_get_args(mrb, "S", &str);
-
-  return mrb_obj_new(mrb, mrb_class_get_under_id(mrb, mrb_class_ptr(self), MRB_SYM(Document)), 1, &str);
-}
-
 MRB_API mrb_value
 mrb_json_load(mrb_state *mrb, mrb_value path_str, mrb_bool symbolize_names)
 {
-  const std::string_view path(RSTRING_PTR(path_str), RSTRING_LEN(path_str));
+  std::string_view path(RSTRING_PTR(path_str), RSTRING_LEN(path_str));
   auto res = padded_string::load(path);
   if (unlikely(res.error() != SUCCESS)) {
     mrb_sys_fail(mrb, "failed to read file");
@@ -1050,7 +1369,9 @@ void mrb_mruby_fast_json_gem_init(mrb_state *mrb) {
   mrb_define_module_function_id(mrb, json_mod, MRB_SYM(dump), mrb_json_dump_m,
                              MRB_ARGS_REQ(1));
   mrb_define_module_function_id(mrb, json_mod, MRB_SYM(parse_lazy), mrb_json_parse_lazy,
-                             MRB_ARGS_REQ(1));
+                             MRB_ARGS_ARG(1, 1));
+    mrb_define_module_function_id(mrb, json_mod, MRB_SYM(load_lazy), mrb_json_load_lazy,
+                             MRB_ARGS_ARG(1, 1));
   mrb_define_module_function_id(mrb, json_mod, MRB_SYM(load), mrb_json_load_m,
                              MRB_ARGS_REQ(1) | MRB_ARGS_KEY(1, 0));
 
@@ -1077,30 +1398,70 @@ void mrb_mruby_fast_json_gem_init(mrb_state *mrb) {
   mrb_define_method_id(mrb, mrb->symbol_class, MRB_SYM(to_json),
                        mrb_symbol_to_json, MRB_ARGS_NONE());
 
+  //
+  // JSON::Parser
+  //
+  struct RClass *parser_cls =
+    mrb_define_class_under_id(mrb, json_mod, MRB_SYM(Parser), mrb->object_class);
+  MRB_SET_INSTANCE_TT(parser_cls, MRB_TT_CDATA);
 
-  struct RClass* doc =
+  mrb_define_method_id(mrb, parser_cls, MRB_SYM(initialize),
+                       mrb_ondemand_parser_initialize, MRB_ARGS_OPT(1));
+  mrb_define_method_id(mrb, parser_cls, MRB_SYM(allocate),
+                       mrb_ondemand_parser_allocate, MRB_ARGS_OPT(1));
+  mrb_define_method_id(mrb, parser_cls, MRB_SYM(iterate),
+                       mrb_ondemand_parser_iterate, MRB_ARGS_REQ(1));
+
+  //
+  // JSON::PaddedString
+  //
+  struct RClass *ps_cls =
+    mrb_define_class_under_id(mrb, json_mod, MRB_SYM(PaddedString), mrb->object_class);
+  MRB_SET_INSTANCE_TT(ps_cls, MRB_TT_CDATA);
+
+  mrb_define_method_id(mrb, ps_cls, MRB_SYM(initialize),
+                       mrb_padded_string_initialize, MRB_ARGS_REQ(1));
+  mrb_define_class_method_id(mrb, ps_cls, MRB_SYM(load), mrb_padded_string_s_load, MRB_ARGS_REQ(1));
+
+  //
+  // JSON::PaddedStringView
+  //
+  struct RClass *psv_cls =
+    mrb_define_class_under_id(mrb, json_mod, MRB_SYM(PaddedStringView), mrb->object_class);
+  MRB_SET_INSTANCE_TT(psv_cls, MRB_TT_CDATA);
+
+  mrb_define_method_id(mrb, psv_cls, MRB_SYM(initialize),
+                       mrb_padded_string_view_initialize, MRB_ARGS_ARG(0, 2));
+
+  struct RClass* doc_cls =
     mrb_define_class_under_id(mrb, json_mod, MRB_SYM(Document), mrb->object_class);
-  MRB_SET_INSTANCE_TT(doc, MRB_TT_DATA);
+  MRB_SET_INSTANCE_TT(doc_cls, MRB_TT_CDATA);
 
-  mrb_define_method_id(mrb, doc, MRB_SYM(initialize),
-                      mrb_json_doc_initialize, MRB_ARGS_REQ(1));
-  mrb_define_method_id(mrb, doc, MRB_OPSYM(aref),
+  mrb_define_method_id(mrb, doc_cls, MRB_SYM(initialize),
+                      mrb_json_doc_initialize, MRB_ARGS_ARG(1, 1));
+  mrb_define_method_id(mrb, doc_cls, MRB_OPSYM(aref),
                       mrb_json_doc_aref, MRB_ARGS_REQ(1));
-  mrb_define_method_id(mrb, doc, MRB_SYM(find_field),
+  mrb_define_method_id(mrb, doc_cls, MRB_SYM(find_field),
                       mrb_json_doc_find_field, MRB_ARGS_REQ(1));
-  mrb_define_method_id(mrb, doc, MRB_SYM(find_field_unordered),
+  mrb_define_method_id(mrb, doc_cls, MRB_SYM(fetch),
+                      mrb_json_doc_fetch, MRB_ARGS_ARG(1, 1) | MRB_ARGS_BLOCK());
+
+  mrb_define_method_id(mrb, doc_cls, MRB_SYM(find_field_unordered),
                       mrb_json_doc_find_field_unordered, MRB_ARGS_REQ(1));
-  mrb_define_method_id( mrb, doc, MRB_SYM(at),
+  mrb_define_method_id( mrb, doc_cls, MRB_SYM(at),
                       mrb_json_doc_at, MRB_ARGS_REQ(1));
-  mrb_define_method_id( mrb, doc, MRB_SYM(at_pointer),
+  mrb_define_method_id( mrb, doc_cls, MRB_SYM(at_pointer),
                       mrb_json_doc_at_pointer, MRB_ARGS_REQ(1));
-  mrb_define_method_id(mrb, doc, MRB_SYM(at_path),
+
+  mrb_define_method_id(mrb, doc_cls, MRB_SYM(at_path),
                       mrb_json_doc_at_path, MRB_ARGS_REQ(1));
-  mrb_define_method_id(mrb, doc, MRB_SYM(at_path_with_wildcard),
+  mrb_define_method_id(mrb, doc_cls, MRB_SYM(at_path_with_wildcard),
                       mrb_json_doc_at_path_with_wildcard, MRB_ARGS_REQ(1));
-  mrb_define_method_id(mrb, doc, MRB_SYM(iterate),
-                      mrb_json_doc_iterate, MRB_ARGS_NONE());
-  mrb_define_method_id(mrb, doc, MRB_SYM(array_each),
+  mrb_define_method_id(mrb, doc_cls, MRB_SYM(rewind),
+                     mrb_json_doc_rewind, MRB_ARGS_NONE());
+  mrb_define_method_id(mrb, doc_cls, MRB_SYM(reiterate),
+                     mrb_json_doc_reiterate, MRB_ARGS_NONE());
+  mrb_define_method_id(mrb, doc_cls, MRB_SYM(array_each),
                       mrb_json_doc_array_each, MRB_ARGS_BLOCK());
 }
 
