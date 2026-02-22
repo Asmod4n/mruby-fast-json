@@ -580,22 +580,22 @@ static mrb_value
 mrb_json_load_lazy(mrb_state *mrb, mrb_value self)
 {
   mrb_value path;
-  mrb_value parser_obj = mrb_nil_value();
+  mrb_value parser_obj = mrb_undef_value();
   mrb_get_args(mrb, "S|o", &path, &parser_obj);
 
   struct RClass *json_mod = mrb_class_ptr(self);
 
   // 1. Load padded_string_view from file
-  mrb_value view_obj = mrb_funcall_id(
+  mrb_value view_obj = mrb_funcall_argv(
     mrb,
     mrb_obj_value(mrb_class_get_under_id(mrb, json_mod, MRB_SYM(PaddedString))),
     MRB_SYM(load),
     1,
-    path
+    &path
   );
 
   // 2. Create Parser if none provided
-  if (mrb_nil_p(parser_obj)) {
+  if (mrb_undef_p(parser_obj)) {
     parser_obj = mrb_obj_new(
       mrb,
       mrb_class_get_under_id(mrb, json_mod, MRB_SYM(Parser)),
@@ -604,14 +604,13 @@ mrb_json_load_lazy(mrb_state *mrb, mrb_value self)
   }
 
   // 3. Create Document(view, parser)
-  mrb_value args[2] = { view_obj, parser_obj };
+  mrb_value args[] = { view_obj, parser_obj };
   return mrb_obj_new(
     mrb,
     mrb_class_get_under_id(mrb, json_mod, MRB_SYM(Document)),
     2, args
   );
 }
-
 
 static mrb_value convert_ondemand_value_to_mrb(mrb_state* mrb, ondemand::value& v);
 
@@ -649,84 +648,6 @@ convert_ondemand_object(mrb_state* mrb, ondemand::object obj)
   return hash;
 }
 
-#if defined(__SIZEOF_INT128__)
-static bool parse_decimal_to_u128(std::string_view digits, unsigned __int128 &out) {
-  const size_t len = digits.size();
-  if (len == 0 || len > 39) return false;
-
-  // general path: use unsigned __int128 with precomputed limit
-  const unsigned __int128 U128_MAX = static_cast<unsigned __int128>(-1);
-  const unsigned __int128 LIMIT = U128_MAX / 10;
-  const unsigned int LIMIT_DIGIT = static_cast<unsigned int>(U128_MAX % 10);
-
-  unsigned __int128 acc = 0;
-  const char* p = digits.data();
-  const char* end = p + len;
-  while (p < end) {
-    const unsigned int d = static_cast<unsigned int>(*p++ - '0');
-    if (d > 9u) return false;
-    // check overflow: acc*10 + d > U128_MAX ?
-    if (acc > LIMIT || (acc == LIMIT && d > LIMIT_DIGIT)) return false;
-    acc = acc * 10 + d;
-  }
-  out = acc;
-  return true;
-}
-
-static mrb_value
-convert_big_integer_from_ondemand(mrb_state *mrb, ondemand::value& v)
-{
-  // sign (cheap)
-  const auto negative = v.is_negative();
-
-  // get raw token text (no allocation)
-  auto raw_res = v.raw_json();
-  if (unlikely(raw_res.error() != SUCCESS)) raise_simdjson_error(mrb, raw_res.error());
-  std::string_view sv = raw_res.value();
-
-  // strip sign if present in token text; rely on is_negative() for sign
-  size_t pos = 0;
-  if (!sv.empty() && (sv[0] == '+' || sv[0] == '-')) pos = 1;
-  std::string_view digits = sv.substr(pos);
-
-  if (unlikely(digits.empty())) {
-    mrb_raise(mrb, E_TYPE_ERROR, "invalid big integer");
-  }
-
-  // parse into unsigned accumulator (fast)
-  unsigned __int128 acc = 0;
-  if (!parse_decimal_to_u128(digits, acc)) {
-    // overflow beyond unsigned 128 or invalid digits — policy: return raw token
-    return mrb_str_new(mrb, sv.data(), sv.size());
-  }
-
-  if (negative) {
-    // signed 128 range: magnitude must be <= 2^127
-    const unsigned __int128 SIGNED_LIMIT = (static_cast<unsigned __int128>(1) << 127);
-
-    if (acc > SIGNED_LIMIT) {
-      // too large to fit signed 128
-      return mrb_str_new(mrb, sv.data(), sv.size());
-    }
-
-    // produce -2^127 safely without UB
-    if (acc == SIGNED_LIMIT) {
-      const unsigned __int128 u = SIGNED_LIMIT;
-      __int128 sval;
-      std::memcpy(&sval, &u, sizeof(sval)); // bitwise copy: yields -2^127 on two's complement
-      return mrb_convert_number(mrb, sval);
-    } else {
-      // acc < 2^127: safe to cast and negate
-      const __int128 sval = - static_cast<__int128>(acc);
-      return mrb_convert_number(mrb, sval);
-    }
-  } else {
-    // positive: return unsigned 128
-    return mrb_convert_number(mrb, static_cast<unsigned __int128>(acc));
-  }
-}
-#endif // __SIZEOF_INT128__
-
 static mrb_value
 convert_number_from_ondemand(mrb_state *mrb, ondemand::value& v)
 {
@@ -742,14 +663,14 @@ convert_number_from_ondemand(mrb_state *mrb, ondemand::value& v)
         return mrb_convert_number(mrb, static_cast<double>(dres.value()));
       }
       raise_simdjson_error(mrb, dres.error());
-    }
+    } break;
     case number_type::signed_integer: {
       auto ires = v.get_int64();
       if (likely(ires.error() == SUCCESS)) {
         return mrb_convert_number(mrb, static_cast<int64_t>(ires.value()));
       }
       raise_simdjson_error(mrb, ires.error());
-    }
+    } break;
 
     case number_type::unsigned_integer: {
       auto ures = v.get_uint64();
@@ -757,19 +678,19 @@ convert_number_from_ondemand(mrb_state *mrb, ondemand::value& v)
         return mrb_convert_number(mrb, static_cast<uint64_t>(ures.value()));
       }
       raise_simdjson_error(mrb, ures.error());
-    }
+    } break;
 
     case number_type::big_integer: {
-#if !defined(__SIZEOF_INT128__)
-      mrb_raise(mrb, E_JSON_BIGINT_ERROR, "128 bit integers are not supported");
-#else
-      return convert_big_integer_from_ondemand(mrb, v);
-#endif
-    }
+      auto sv = v.raw_json_token();
+
+      return mrb_str_to_integer(mrb, mrb_str_new_static(mrb, sv.data(), sv.size()), 0, 0);
+    } break;
 
     default:
       mrb_raise(mrb, E_JSON_NUMBER_ERROR, "unknown number type");
   }
+
+  return mrb_undef_value();
 }
 
 static mrb_value

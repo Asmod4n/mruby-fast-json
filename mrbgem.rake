@@ -27,6 +27,8 @@ MRuby::Gem::Specification.new('mruby-fast-json') do |spec|
   spec.add_dependency 'mruby-bigint'
   spec.add_dependency 'mruby-c-ext-helpers'
   spec.add_dependency 'mruby-chrono'
+      spec.cc.defines  << 'MRB_USE_BIGINT'
+    spec.cxx.defines << 'MRB_USE_BIGINT'
 
   unless spec.cxx.defines.include? 'MRB_DEBUG'
     spec.cxx.flags << '-O3' << "-march=native"
