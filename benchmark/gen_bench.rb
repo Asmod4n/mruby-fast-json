@@ -7,7 +7,7 @@ File.open("output.json", "w") do |file|
   i = 0
   buffer = []
 
-  while size < 10 * 1024 * 1024  # 10 MB
+  while size < 100 * 1024 * 1024  # 100 MB
     obj = { id: i, meta: { a: 1, b: 2 }, data: "x" * 100_000 }
 
     json = JSON.dump(obj)
@@ -20,4 +20,4 @@ File.open("output.json", "w") do |file|
   file.write("\n]")  # Close JSON array properly
 end
 
-puts "Created output.json (approx. 10 MB)"
+puts "Created output.json (approx. 100 MB)"

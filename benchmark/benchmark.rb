@@ -12,9 +12,9 @@ def measure_json_dump_performance(json_size)
   load_elapsed = load_timer.elapsed
 
   # --- Parse / access (erste Nutzung) ---
-  puts "Parse start: #{Time.now}"
+  puts "Access start: #{Time.now}"
   parse_timer = Chrono::Timer.new
-  data = doc.at(104)
+  data = doc.array_each
   parse_elapsed = parse_timer.elapsed
   mrb_raise "returned nil" if data.nil?
 
@@ -54,12 +54,12 @@ end
 
 result = measure_json_dump_performance(json_size)
 
-puts "--- Load (JSON.load_lazy) ---"
+puts "--- Load (JSON.parse_lazy) ---"
 puts "Elapsed            : #{result[:load][:time].round(6)} seconds"
 puts "Throughput         : #{result[:load][:gbps].round(2)} GBps"
 puts "Ops/sec (1 load)   : #{result[:load][:ops_per_sec].round(2)}"
 
-puts "--- Parse (first access) ---"
+puts "--- Access (first access) ---"
 puts "Elapsed            : #{result[:parse][:time].round(6)} seconds"
 puts "Throughput         : #{result[:parse][:gbps].round(2)} GBps"
 puts "Ops/sec (1 parse)  : #{result[:parse][:ops_per_sec].round(2)}"
