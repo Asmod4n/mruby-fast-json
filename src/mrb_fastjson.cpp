@@ -16,6 +16,7 @@
 MRB_BEGIN_DECL
 #include <mruby/internal.h>
 MRB_END_DECL
+#include <mruby/ned.h>
 #include <string_view>
 #ifndef SIMDJSON_THREADS_ENABLED
 #define SIMDJSON_THREADS_ENABLED
@@ -1114,6 +1115,141 @@ mrb_json_doc_reiterate(mrb_state *mrb, mrb_value self)
   return mrb_undef_value();
 }
 
+class MrubyDeserialize {
+public:
+  mrb_state *mrb;
+  mrb_value self;
+
+  explicit MrubyDeserialize(mrb_state *mrb, mrb_value self) : mrb(mrb), self(self) {}
+};
+
+static inline bool valid_schema_entry(mrb_value key, mrb_value expected) {
+  return mrb_symbol_p(key) && mrb_integer_p(expected);
+}
+
+static inline bool ivar_to_key(mrb_state *mrb, mrb_value key, std::string_view &out) {
+  mrb_int len;
+  const char *str = mrb_sym_name_len(mrb, mrb_symbol(key), &len);
+  if (likely(str)) {
+    out = std::string_view(str, len);
+    return true;
+  }
+
+  return false;
+}
+
+static inline bool strip_leading_ats(std::string_view &sv) {
+  size_t n = sv.size();
+  size_t i = 0;
+
+  // Entfernt ALLE '@' am Anfang
+  while (i < n && sv[i] == '@') {
+    i++;
+  }
+
+  sv.remove_prefix(i);
+  return true; // für deinen if-likely-Chain
+}
+
+static inline bool lookup_field(ondemand::object *obj,
+                         std::string_view sv,
+                         ondemand::value &out,
+                         error_code &err) {
+  err = (*obj)[sv].get(out);
+  return likely(err == SUCCESS);
+}
+
+static inline bool get_type(ondemand::value &v,
+                     ondemand::json_type &out,
+                     error_code &err) {
+  err = v.type().get(out);
+  return likely(err == SUCCESS);
+}
+
+static inline bool types_match(ondemand::json_type actual, mrb_value expected) {
+  auto underlying = static_cast<std::underlying_type_t<ondemand::json_type>>(actual);
+  return likely(underlying == mrb_integer(expected));
+}
+
+namespace simdjson {
+
+template <typename simdjson_value>
+auto tag_invoke(deserialize_tag, simdjson_value &val, MrubyDeserialize& mruby) {
+  using namespace ondemand;
+  object obj;
+  auto error = val.get_object().get(obj);
+  if (unlikely(error)) {
+    return error;
+  }
+
+  mrb_state *mrb = mruby.mrb;
+  mrb_value self = mruby.self;
+
+  struct RClass *klass = mrb_class(mrb, self);
+  mrb_value schema = mrb_ned_schema(mrb, klass);
+  if (unlikely(mrb_nil_p(schema))) {
+    return INCORRECT_TYPE;
+  }
+
+  struct Ctx {
+    mrb_value self;
+    object *obj;
+    error_code error = SUCCESS;
+  } ctx{self, &obj};
+
+  mrb_hash_foreach(
+    mrb,
+    mrb_hash_ptr(schema),
+    [](mrb_state *mrb, mrb_value key, mrb_value expected_type, void *data) -> int {
+
+      auto *ctx = static_cast<Ctx*>(data);
+      json_type type;
+      value json_field;
+      std::string_view sv;
+
+      if (likely(
+            valid_schema_entry(key, expected_type) &&
+            ivar_to_key(mrb, key, sv) &&
+            strip_leading_ats(sv) &&
+            lookup_field(ctx->obj, sv, json_field, ctx->error) &&
+            get_type(json_field, type, ctx->error) &&
+            types_match(type, expected_type)
+      )) {
+          mrb_value ruby_value = convert_ondemand_value_to_mrb(mrb, json_field);
+          mrb_iv_set(mrb, ctx->self, mrb_symbol(key), ruby_value);
+          return 0;
+      }
+
+      return 1;
+
+    },
+    &ctx
+  );
+
+  return ctx.error;
+}
+
+} // namespace simdjson
+
+static mrb_value
+mrb_document_deserialize(mrb_state *mrb, mrb_value self)
+{
+  mrb_value into;
+  mrb_get_args(mrb, "o", &into);
+  MrubyDeserialize mruby(mrb, into);
+
+  ondemand::document *doc = mrb_cpp_get<ondemand::document>(mrb, self);
+
+  auto code = doc->get(mruby);
+  if (likely(code == SUCCESS)) {
+    return into;
+  }
+
+  raise_simdjson_error(mrb, code);
+  return mrb_undef_value();
+}
+
+
 static inline void json_encode_nil(builder::string_builder &builder) {
   builder.append_null();
 }
@@ -1487,8 +1623,19 @@ void mrb_mruby_fast_json_gem_init(mrb_state *mrb) {
                      mrb_json_doc_reiterate, MRB_ARGS_NONE());
   mrb_define_method_id(mrb, doc_cls, MRB_SYM(array_each),
                       mrb_json_doc_array_each, MRB_ARGS_BLOCK());
-    mrb_define_method_id(mrb, doc_cls, MRB_SYM(object_each),
+  mrb_define_method_id(mrb, doc_cls, MRB_SYM(object_each),
                       mrb_json_doc_object_each, MRB_ARGS_BLOCK());
+  mrb_define_method_id(mrb, doc_cls, MRB_SYM(into),
+                      mrb_document_deserialize, MRB_ARGS_REQ(1));
+
+  struct RClass *json_type_mod = mrb_define_module_under_id(mrb, json_mod, MRB_SYM(Type));
+  mrb_define_const_id(mrb, json_type_mod, MRB_SYM(Array), mrb_convert_number(mrb, ondemand::json_type::array));
+  mrb_define_const_id(mrb, json_type_mod, MRB_SYM(Object), mrb_convert_number(mrb, ondemand::json_type::object));
+  mrb_define_const_id(mrb, json_type_mod, MRB_SYM(Number), mrb_convert_number(mrb, ondemand::json_type::number));
+  mrb_define_const_id(mrb, json_type_mod, MRB_SYM(String), mrb_convert_number(mrb, ondemand::json_type::string));
+  mrb_define_const_id(mrb, json_type_mod, MRB_SYM(Boolean), mrb_convert_number(mrb, ondemand::json_type::boolean));
+  mrb_define_const_id(mrb, json_type_mod, MRB_SYM(Null), mrb_convert_number(mrb, ondemand::json_type::null));
+
 }
 
 void mrb_mruby_fast_json_gem_final(mrb_state *mrb) {}

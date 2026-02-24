@@ -27,8 +27,14 @@ MRuby::Gem::Specification.new('mruby-fast-json') do |spec|
   spec.add_dependency 'mruby-bigint'
   spec.add_dependency 'mruby-c-ext-helpers'
   spec.add_dependency 'mruby-chrono'
+  spec.add_dependency 'mruby-native-ext-deserialize', :github => 'Asmod4n/mruby-native-ext-deserialize', branch: "main"
   spec.cc.defines  << 'MRB_USE_BIGINT'
   spec.cxx.defines << 'MRB_USE_BIGINT'
+  if spec.for_windows?
+    spec.cxx.flags << '/std:c++20'
+  else
+    spec.cxx.flags << '-std=c++20'
+  end
 
   unless spec.cxx.defines.include? 'MRB_DEBUG'
     spec.cxx.flags << '-O3'

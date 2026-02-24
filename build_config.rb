@@ -14,6 +14,5 @@ MRuby::Build.new do |conf|
     conf.enable_test
     conf.gembox 'default'
 
-    conf.gem '../mruby-benchmark'
     conf.gem File.expand_path(File.dirname(__FILE__))
 end
