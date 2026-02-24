@@ -3,18 +3,18 @@ $json = File.read('output.json')
 JSON.zero_copy_parsing = true
 
 def measure_json_dump_performance(json_size)
+  parser = JSON::Parser.new(json_size)
+  parser.allocate(json_size)
   # --- Load (bis doc fertig ist) ---
   puts "Parse start: #{Time.now}"
   load_timer = Chrono::Timer.new
-  parser = JSON::Parser.new(json_size)
-  parser.allocate(json_size)
   doc = parser.iterate($json)
   load_elapsed = load_timer.elapsed
 
   # --- Parse / access (erste Nutzung) ---
   puts "Access start: #{Time.now}"
   parse_timer = Chrono::Timer.new
-  data = doc.array_each
+  data = doc.at(1048)
   parse_elapsed = parse_timer.elapsed
   mrb_raise "returned nil" if data.nil?
 
