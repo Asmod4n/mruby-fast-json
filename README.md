@@ -264,8 +264,6 @@ But raise for:
 
 # **Native Deserialization (Zero‑Magic, Explicit Contracts)**
 
-This is your masterpiece.
-
 You can define a Ruby class with a schema:
 
 ```ruby
@@ -300,6 +298,14 @@ foo.foo   # => "hello"
 - If simdjson reports an error → raised immediately
 
 This is a **deterministic, explicit, zero‑magic** deserialization pipeline.
+
+## Supported Types
+- JSON::Type::Array
+- JSON::Type::Object
+- JSON::Type::Number
+- JSON::Type::String
+- JSON::Type::Boolean
+- JSON::Type::Null
 
 ---
 
