@@ -299,7 +299,7 @@ foo.foo   # => "hello"
 
 This is a **deterministic, explicit, zero‑magic** deserialization pipeline.
 
-## Supported Types
+Supported Types
 - JSON::Type::Array
 - JSON::Type::Object
 - JSON::Type::Number
@@ -340,7 +340,7 @@ Use DOM (`JSON.parse`) when:
 class User
   attr_accessor :id, :name
 
-  native_ext_deserialize :@id,   JSON::Type::Integer
+  native_ext_deserialize :@id,   JSON::Type::Number
   native_ext_deserialize :@name, JSON::Type::String
 end
 
@@ -464,7 +464,7 @@ Lazy documents can be deserialized directly into Ruby objects:
 ```ruby
 class User
   attr_reader :id, :name
-  native_ext_deserialize :@id,   JSON::Type::Integer
+  native_ext_deserialize :@id,   JSON::Type::Number
   native_ext_deserialize :@name, JSON::Type::String
 end
 
