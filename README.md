@@ -347,10 +347,9 @@ end
 doc = JSON.load_lazy("users.json")
 
 users = []
-doc["users"].array_each do |user_doc|
+doc.array_each do |user_doc|
   u = User.new
-  user_doc.into(u)
-  users << u
+  users << user_doc.into(u)
 end
 ```
 
@@ -379,7 +378,7 @@ Unlike `JSON.parse(File.read(...))`, this API:
 doc = JSON.load_lazy("data.json")
 
 doc["user"]["name"]   # parsed on demand
-doc["items"].array_each do |item|
+doc.array_each do |item|
   puts item["id"]
 end
 ```
@@ -414,7 +413,7 @@ The result is a fully lazy, streaming JSON document.
 ```ruby
 doc = JSON.load_lazy("big.json")
 
-doc["records"].array_each do |record|
+doc.array_each do |record|
   puts record["id"]
 end
 ```
