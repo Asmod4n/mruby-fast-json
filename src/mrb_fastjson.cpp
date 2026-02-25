@@ -1123,9 +1123,16 @@ public:
   explicit MrubyDeserialize(mrb_state *mrb, mrb_value self) : mrb(mrb), self(self) {}
 };
 
-static inline bool valid_schema_entry(mrb_value key, mrb_value expected) {
-  return mrb_symbol_p(key) && mrb_integer_p(expected);
+static inline bool valid_schema_entry(mrb_state *mrb,
+                                      mrb_value key,
+                                      mrb_value expected) {
+  if (likely(mrb_symbol_p(key) && mrb_integer_p(expected))) {
+    return true;
+  } else {
+    mrb_raise(mrb, E_TYPE_ERROR, "schema isn't symbols and integers");
+  }
 }
+
 
 static inline bool ivar_to_key(mrb_state *mrb, mrb_value key, std::string_view &out) {
   mrb_int len;
@@ -1133,9 +1140,10 @@ static inline bool ivar_to_key(mrb_state *mrb, mrb_value key, std::string_view &
   if (likely(str)) {
     out = std::string_view(str, len);
     return true;
+  } else {
+    mrb_raise(mrb, E_RUNTIME_ERROR, "can't get sym string");
+    return false;
   }
-
-  return false;
 }
 
 static inline bool strip_leading_ats(std::string_view &sv) {
@@ -1166,9 +1174,16 @@ static inline bool get_type(ondemand::value &v,
   return likely(err == SUCCESS);
 }
 
-static inline bool types_match(ondemand::json_type actual, mrb_value expected) {
+static inline bool types_match(mrb_state *mrb,
+                               ondemand::json_type actual,
+                               mrb_value expected) {
   auto underlying = static_cast<std::underlying_type_t<ondemand::json_type>>(actual);
-  return likely(underlying == mrb_integer(expected));
+  if (likely(underlying == mrb_integer(expected))) {
+    return true;
+  } else {
+    mrb_raise(mrb, E_TYPE_ERROR, "JSON isn't expected type");
+    return false;
+  }
 }
 
 namespace simdjson {
@@ -1188,13 +1203,13 @@ auto tag_invoke(deserialize_tag, simdjson_value &val, MrubyDeserialize& mruby) {
   struct RClass *klass = mrb_class(mrb, self);
   mrb_value schema = mrb_ned_schema(mrb, klass);
   if (unlikely(!mrb_hash_p(schema))) {
-    return INCORRECT_TYPE;
+    mrb_raise(mrb, E_TYPE_ERROR, "schema is not a hash");
   }
 
   struct Ctx {
     mrb_value self;
     object *obj;
-    error_code error = SUCCESS;
+    error_code error = INCORRECT_TYPE;
   } ctx{self, &obj};
 
   mrb_hash_foreach(
@@ -1208,25 +1223,29 @@ auto tag_invoke(deserialize_tag, simdjson_value &val, MrubyDeserialize& mruby) {
       std::string_view sv;
 
       if (likely(
-            valid_schema_entry(key, expected_type) &&
+            valid_schema_entry(mrb, key, expected_type) &&
             ivar_to_key(mrb, key, sv) &&
             strip_leading_ats(sv) &&
             lookup_field(ctx->obj, sv, json_field, ctx->error) &&
             get_type(json_field, type, ctx->error) &&
-            types_match(type, expected_type)
+            types_match(mrb, type, expected_type)
       )) {
           mrb_value ruby_value = convert_ondemand_value_to_mrb(mrb, json_field);
           mrb_iv_set(mrb, ctx->self, mrb_symbol(key), ruby_value);
+          ctx->error = SUCCESS;
           return 0;
+      } else {
+        return 1;
       }
-
-      return 1;
-
     },
     &ctx
   );
-
-  return ctx.error;
+  if (likely(ctx.error == SUCCESS)) {
+    return SUCCESS;
+  } else {
+    raise_simdjson_error(mrb, ctx.error);
+    return ctx.error;
+  }
 }
 
 } // namespace simdjson

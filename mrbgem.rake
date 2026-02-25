@@ -28,6 +28,7 @@ MRuby::Gem::Specification.new('mruby-fast-json') do |spec|
   spec.add_dependency 'mruby-c-ext-helpers'
   spec.add_dependency 'mruby-chrono'
   spec.add_dependency 'mruby-native-ext-deserialize', :github => 'Asmod4n/mruby-native-ext-deserialize', branch: "main"
+  spec.add_test_dependency 'mruby-io'
   spec.cc.defines  << 'MRB_USE_BIGINT'
   spec.cxx.defines << 'MRB_USE_BIGINT'
   if spec.for_windows?

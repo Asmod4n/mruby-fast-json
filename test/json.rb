@@ -254,3 +254,178 @@ assert("JSON.parse - UnescapedCharsError") do
     JSON.parse(json)
   end
 end
+
+
+# ---------------------------------------------------------
+# JSON.parse_lazy — basic functionality
+# ---------------------------------------------------------
+
+assert("JSON.parse_lazy - simple object") do
+  doc = JSON.parse_lazy('{"name":"Alice","age":30}')
+  assert_equal "Alice", doc["name"]
+  assert_equal 30, doc["age"]
+end
+
+assert("JSON.parse_lazy - nested object") do
+  doc = JSON.parse_lazy('{"user":{"id":1,"name":"Bob"}}')
+  user = doc["user"]
+  assert_equal 1, user["id"]
+  assert_equal "Bob", user["name"]
+end
+
+assert("JSON.parse_lazy - array access via .at") do
+  doc = JSON.parse_lazy('[true,null,42,"hi"]')
+  assert_equal true, doc.at(0)
+end
+
+assert("JSON.parse_lazy - array access via .at after rewind") do
+  doc = JSON.parse_lazy('[true,null,42,"hi"]')
+  doc.at(0)
+  doc.rewind
+  assert_equal nil, doc.at(1)
+end
+
+
+assert("JSON.parse_lazy - UTF-8 string") do
+  doc = JSON.parse_lazy('{"greeting":"こんにちは"}')
+  assert_equal "こんにちは", doc["greeting"]
+end
+
+assert("JSON.parse_lazy - empty array and object") do
+  assert_equal [], JSON.parse_lazy("[]").array_each
+  assert_equal({}, JSON.parse_lazy("{}").object_each)
+end
+
+# ---------------------------------------------------------
+# Lookup semantics
+# ---------------------------------------------------------
+
+assert("JSON.parse_lazy - lookup miss returns nil") do
+  doc = JSON.parse_lazy('{"a":1}')
+  assert_nil doc["missing"]
+end
+
+assert("JSON.parse_lazy - fetch raises KeyError") do
+  doc = JSON.parse_lazy('{"a":1}')
+  assert_raise KeyError do
+    doc.fetch("missing")
+  end
+end
+
+assert("JSON.parse_lazy - fetch index raises IndexError") do
+  doc = JSON.parse_lazy('[1,2,3]')
+  assert_raise IndexError do
+    doc.fetch(10)
+  end
+end
+
+# ---------------------------------------------------------
+# JSON Pointer / Path
+# ---------------------------------------------------------
+
+assert("JSON.parse_lazy - at_pointer") do
+  doc = JSON.parse_lazy('{"user":{"name":"Alice"}}')
+  assert_equal "Alice", doc.at_pointer("/user/name")
+end
+
+assert("JSON.parse_lazy - at_path") do
+  doc = JSON.parse_lazy('{"user":{"id":7}}')
+  assert_equal 7, doc.at_path("$.user.id")
+end
+
+assert("JSON.parse_lazy - at_path_with_wildcard") do
+  doc = JSON.parse_lazy('{"items":[{"id":1},{"id":2},{"id":3}]}')
+  ids = doc.at_path_with_wildcard("$.items[*].id")
+  assert_equal [1,2,3], ids
+end
+
+# ---------------------------------------------------------
+# Iteration
+# ---------------------------------------------------------
+
+assert("JSON.parse_lazy - array_each") do
+  doc = JSON.parse_lazy('[1,2,3]')
+  out = []
+  doc.array_each { |v| out << v }
+  assert_equal [1,2,3], out
+end
+
+assert("JSON.parse_lazy - object_each") do
+  doc = JSON.parse_lazy('{"a":1,"b":2}')
+  h = {}
+  doc.object_each { |k,v| h[k] = v }
+  assert_equal({"a"=>1,"b"=>2}, h)
+end
+
+# ---------------------------------------------------------
+# Rewind
+# ---------------------------------------------------------
+
+assert("JSON.parse_lazy - rewind allows re-reading") do
+  doc = JSON.parse_lazy('{"a":1,"b":2}')
+  assert_equal 1, doc["a"]
+  doc.rewind
+  assert_equal 2, doc["b"]
+end
+
+# ---------------------------------------------------------
+# load_lazy (file loading)
+# ---------------------------------------------------------
+
+assert("JSON.load_lazy - loads file lazily") do
+  File.new("tmp.json", "w").write('{"x":123}')
+  doc = JSON.load_lazy("tmp.json")
+  assert_equal 123, doc["x"]
+end
+
+assert("JSON.load_lazy - large file streaming") do
+  File.new("tmp2.json", "w").write('{"items":[1,2,3,4]}')
+  doc = JSON.load_lazy("tmp2.json")
+  assert_equal [1,2,3,4], doc["items"]
+end
+
+# ---------------------------------------------------------
+# native_ext_deserialize
+# ---------------------------------------------------------
+
+assert("JSON.parse_lazy - native_ext_deserialize simple") do
+  class Foo
+    attr_accessor :foo
+    native_ext_deserialize :@foo, JSON::Type::String
+  end
+
+  doc = JSON.parse_lazy('{"foo":"hello"}')
+  foo = Foo.new
+  doc.into(foo)
+
+  assert_equal "hello", foo.foo
+end
+
+assert("JSON.parse_lazy - native_ext_deserialize type mismatch") do
+  class Bar
+    attr_accessor :x
+    native_ext_deserialize :@x, JSON::Type::Number
+  end
+
+  doc = JSON.parse_lazy('{"x":"not an int"}')
+  bar = Bar.new
+
+  assert_raise TypeError do
+    doc.into(bar)
+  end
+end
+
+assert("JSON.parse_lazy - native_ext_deserialize partial match") do
+  class Baz
+    attr_accessor :a, :b
+    native_ext_deserialize :@a, JSON::Type::Number
+    native_ext_deserialize :@b, JSON::Type::String
+  end
+
+  doc = JSON.parse_lazy('{"a":1,"b":"ok"}')
+  baz = Baz.new
+  doc.into(baz)
+
+  assert_equal 1, baz.a
+  assert_equal "ok", baz.b
+end
