@@ -1187,7 +1187,7 @@ auto tag_invoke(deserialize_tag, simdjson_value &val, MrubyDeserialize& mruby) {
 
   struct RClass *klass = mrb_class(mrb, self);
   mrb_value schema = mrb_ned_schema(mrb, klass);
-  if (unlikely(mrb_nil_p(schema))) {
+  if (unlikely(!mrb_hash_p(schema))) {
     return INCORRECT_TYPE;
   }
 
