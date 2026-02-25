@@ -18,9 +18,6 @@ MRB_BEGIN_DECL
 MRB_END_DECL
 #include <mruby/ned.h>
 #include <string_view>
-#ifndef SIMDJSON_THREADS_ENABLED
-#define SIMDJSON_THREADS_ENABLED
-#endif
 #include <simdjson.h>
 
 using namespace simdjson;
@@ -398,7 +395,7 @@ mrb_ondemand_parser_allocate(mrb_state *mrb, mrb_value self)
 {
   mrb_int new_capacity  = MRB_STR_LENGTH_MAX;
   mrb_int new_max_depth = DEFAULT_MAX_DEPTH;
-  mrb_get_args(mrb, "|i", &new_capacity, new_max_depth);
+  mrb_get_args(mrb, "|ii", &new_capacity, &new_max_depth);
 
   auto code = mrb_cpp_get<ondemand::parser>(mrb, self)->allocate(new_capacity, new_max_depth);
   if (likely(code == SUCCESS)) return self;
