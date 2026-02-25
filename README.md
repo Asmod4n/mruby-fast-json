@@ -172,9 +172,10 @@ doc.fetch("name")  # => value or raises KeyError
 ### Array indexing
 
 ```ruby
-doc[0]             # => value or nil
+doc.at(0)          # => value or nil
 doc.fetch(0)       # => value or raises IndexError
 ```
+You may only use .at once per array, when you need to iterate over an array take a look at the Iteration APIs below.
 
 ### JSON Pointer
 
@@ -250,15 +251,15 @@ All simdjson errors are mapped to Ruby exceptions:
 Lookup misses (`NO_SUCH_FIELD`, `INDEX_OUT_OF_BOUNDS`, etc.) return **nil** for:
 
 - `doc["key"]`
-- `doc[index]`
 - `doc.find_field`
+- `doc.find_field_unordered`
+- `doc.at`
+- `doc.at_pointer`
+- `doc.at_path`
 
 But raise for:
 
 - `doc.fetch`
-- `doc.at`
-- `doc.at_pointer`
-- `doc.at_path`
 
 ---
 
@@ -277,8 +278,7 @@ Then deserialize directly from an OnDemand document:
 
 ```ruby
 doc = JSON.parse_lazy('{"foo":"hello"}')
-foo = Foo.new
-doc.into(foo)
+foo = doc.into(Foo.new)
 
 foo.foo   # => "hello"
 ```
