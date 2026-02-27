@@ -548,10 +548,9 @@ mrb_padded_string_view_initialize(mrb_state *mrb, mrb_value self)
         argc == 1 ? RSTRING_CAPA(buf) : capa);
   } else {
     auto *ps = mrb_cpp_get<padded_string>(mrb, buf);
-    auto psv = padded_string_view(*ps);
     mrb_cpp_new<padded_string_view>(
       mrb, self,
-      std::move(psv)
+      *ps
     );
   }
 
@@ -661,10 +660,13 @@ mrb_json_load_lazy(mrb_state *mrb, mrb_value self)
 static mrb_value convert_ondemand_value_to_mrb(mrb_state* mrb, ondemand::value& v);
 
 static mrb_value
-convert_ondemand_array(mrb_state* mrb, ondemand::array arr)
+convert_ondemand_array(mrb_state* mrb, ondemand::value &array)
 {
+  ondemand::array arr;
+  auto code = array.get_array().get(arr);
   bool is_empty;
-  auto code = arr.is_empty().get(is_empty);
+  if (likely(code == SUCCESS))
+   code = arr.is_empty().get(is_empty);
   if (likely(code == SUCCESS)) {
     if (is_empty) {
       return mrb_ary_new(mrb);
@@ -684,10 +686,13 @@ convert_ondemand_array(mrb_state* mrb, ondemand::array arr)
 }
 
 static mrb_value
-convert_ondemand_object(mrb_state* mrb, ondemand::object obj)
+convert_ondemand_object(mrb_state* mrb, ondemand::value &object)
 {
+  ondemand::object obj;
+  auto code = object.get_object().get(obj);
   bool is_empty;
-  auto code = obj.is_empty().get(is_empty);
+  if (likely(code == SUCCESS))
+   code = obj.is_empty().get(is_empty);
   if (likely(code == SUCCESS)) {
     if (is_empty) {
       return mrb_hash_new(mrb);
@@ -699,9 +704,8 @@ convert_ondemand_object(mrb_state* mrb, ondemand::object obj)
       std::string_view k;
       ondemand::value v;
       code = field.unescaped_key().get(k);
-      if (likely(code == SUCCESS)) {
+      if (likely(code == SUCCESS))
         code = field.value().get(v);
-      }
       if (likely(code == SUCCESS)) {
         mrb_value key = mrb_str_new(mrb, k.data(), k.size());
         mrb_value val = convert_ondemand_value_to_mrb(mrb, v);
@@ -728,14 +732,26 @@ convert_number_from_ondemand(mrb_state *mrb, ondemand::value& v)
   if (likely(code == SUCCESS)) {
     switch (number.get_number_type()) {
       case number_type::floating_point_number: {
-        return mrb_convert_number(mrb, number.get_double());
+        if (likely(number.is_double())) {
+          return mrb_convert_number(mrb, number.get_double());
+        } else {
+          mrb_raise(mrb, E_TYPE_ERROR, "not a double");
+        }
       } break;
       case number_type::signed_integer: {
-        return mrb_convert_number(mrb, number.get_int64());
+        if (likely(number.is_int64())) {
+          return mrb_convert_number(mrb, number.get_int64());
+        } else {
+          mrb_raise(mrb, E_TYPE_ERROR, "not a int64");
+        }
       } break;
 
       case number_type::unsigned_integer: {
-        return mrb_convert_number(mrb, number.get_uint64());
+        if (likely(number.is_uint64())) {
+          return mrb_convert_number(mrb, number.get_uint64());
+        } else {
+          mrb_raise(mrb, E_TYPE_ERROR, "not a uint64");
+        }
       } break;
 
       case number_type::big_integer: {
@@ -768,20 +784,33 @@ convert_string_from_ondemand(mrb_state* mrb, ondemand::value& v)
 }
 
 static mrb_value
+convert_boolean_from_ondemand(mrb_state *mrb, ondemand::value &v)
+{
+  bool boolean;
+  auto code = v.get_bool().get(boolean);
+  if (likely(code == SUCCESS)) {
+    return mrb_bool_value(boolean);
+  } else {
+    raise_simdjson_error(mrb, code);
+    return mrb_undef_value();
+  }
+}
+
+static mrb_value
 convert_ondemand_value_to_mrb(mrb_state* mrb, ondemand::value& v)
 {
   using namespace ondemand;
   switch (v.type()) {
     case json_type::object:
-      return convert_ondemand_object(mrb, v.get_object());
+      return convert_ondemand_object(mrb, v);
     case json_type::array:
-      return convert_ondemand_array(mrb, v.get_array());
+      return convert_ondemand_array(mrb, v);
     case json_type::string:
       return convert_string_from_ondemand(mrb, v);
     case json_type::number:
       return convert_number_from_ondemand(mrb, v);
     case json_type::boolean:
-      return mrb_bool_value(v.get_bool());
+      return convert_boolean_from_ondemand(mrb, v);
     case json_type::null:
       return mrb_nil_value();
     case json_type::unknown:
@@ -1178,23 +1207,26 @@ public:
 
 static inline bool valid_schema_entry(mrb_state *mrb,
                                       mrb_value key,
-                                      mrb_value expected) {
+                                      mrb_value expected,
+                                      error_code &err) {
   if (likely(mrb_symbol_p(key) && mrb_integer_p(expected))) {
     return true;
   } else {
+    err = INCORRECT_TYPE;
     mrb_raise(mrb, E_TYPE_ERROR, "schema isn't symbols and integers");
     return false;
   }
 }
 
 
-static inline bool ivar_to_key(mrb_state *mrb, mrb_value key, std::string_view &out) {
+static inline bool ivar_to_key(mrb_state *mrb, mrb_value key, std::string_view &out, error_code &err) {
   mrb_int len;
   const char *str = mrb_sym_name_len(mrb, mrb_symbol(key), &len);
   if (likely(str)) {
     out = std::string_view(str, len);
     return true;
   } else {
+    err = UNEXPECTED_ERROR;
     mrb_raise(mrb, E_RUNTIME_ERROR, "can't get sym string");
     return false;
   }
@@ -1228,11 +1260,13 @@ static inline bool get_type(ondemand::value &v,
 
 static inline bool types_match(mrb_state *mrb,
                                ondemand::json_type actual,
-                               mrb_value expected) {
+                               mrb_value expected,
+                               error_code &err) {
   auto underlying = static_cast<std::underlying_type_t<ondemand::json_type>>(actual);
   if (likely(underlying == mrb_integer(expected))) {
     return true;
   } else {
+    err = INCORRECT_TYPE;
     mrb_raise(mrb, E_TYPE_ERROR, "JSON isn't expected type");
     return false;
   }
@@ -1261,7 +1295,7 @@ auto tag_invoke(deserialize_tag, simdjson_value &val, MrubyDeserialize& mruby) {
   struct Ctx {
     mrb_value into;
     object *obj;
-    error_code error = INCORRECT_TYPE;
+    error_code error = SUCCESS;
   } ctx{into, &obj};
 
   mrb_hash_foreach(
@@ -1275,16 +1309,15 @@ auto tag_invoke(deserialize_tag, simdjson_value &val, MrubyDeserialize& mruby) {
       json_type type;
 
       if (likely(
-            valid_schema_entry(mrb, key, expected_type) &&
-            ivar_to_key(mrb, key, sv) &&
+            valid_schema_entry(mrb, key, expected_type, ctx->error) &&
+            ivar_to_key(mrb, key, sv, ctx->error) &&
             strip_leading_ats(sv) &&
             lookup_field(ctx->obj, sv, json_field, ctx->error) &&
             get_type(json_field, type, ctx->error) &&
-            types_match(mrb, type, expected_type)
+            types_match(mrb, type, expected_type, ctx->error)
       )) {
           mrb_value ruby_value = convert_ondemand_value_to_mrb(mrb, json_field);
           mrb_iv_set(mrb, ctx->into, mrb_symbol(key), ruby_value);
-          ctx->error = SUCCESS;
           return 0;
       } else {
         return 1;
