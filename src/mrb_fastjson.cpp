@@ -289,22 +289,60 @@ static void raise_simdjson_error(mrb_state *mrb, const error_code code) {
   }
 }
 
-MRB_API mrb_value mrb_json_parse(mrb_state *mrb, mrb_value str,
-                                 mrb_bool symbolize_names) {
-  dom::parser parser;
+#ifndef MRB_STR_LENGTH_MAX
+#define MRB_STR_LENGTH_MAX 1048576
+#endif
+
+MRB_CPP_DEFINE_TYPE(dom::parser, dom_parser);
+
+static mrb_value
+mrb_dom_parser_initialize(mrb_state *mrb, mrb_value self)
+{
+  mrb_int max_capacity = SIMDJSON_MAXSIZE_BYTES;
+  mrb_get_args(mrb, "|i", &max_capacity);
+
+  mrb_cpp_new<dom::parser>(mrb, self, max_capacity);
+  return self;
+}
+
+
+static mrb_value
+mrb_dom_parser_allocate(mrb_state *mrb, mrb_value self)
+{
+  mrb_int new_capacity  = MRB_STR_LENGTH_MAX;
+  mrb_int new_max_depth = DEFAULT_MAX_DEPTH;
+  mrb_get_args(mrb, "|ii", &new_capacity, &new_max_depth);
+
+  auto code = mrb_cpp_get<dom::parser>(mrb, self)->allocate(new_capacity, new_max_depth);
+  if (likely(code == SUCCESS)) return self;
+
+  raise_simdjson_error(mrb, code);
+  return mrb_undef_value();
+}
+
+static mrb_value
+mrb_dom_parser_parse(mrb_state *mrb, mrb_value self)
+{
+  mrb_value arg;
+  mrb_get_args(mrb, "S", &arg);
+
+  dom::parser *parser = mrb_cpp_get<dom::parser>(mrb, self);
   padded_string jsonbuffer;
-  auto view = simdjson_safe_view_from_mrb_string(mrb, str, jsonbuffer);
-  auto result = parser.parse(view);
+  auto view = simdjson_safe_view_from_mrb_string(mrb, arg, jsonbuffer);
+  dom::element element;
+  auto code = parser->parse(view).get(element);
 
-  if (unlikely(result.error() != SUCCESS)) {
-    raise_simdjson_error(mrb, result.error());
+  if (likely(code == SUCCESS)) {
+    return convert_element(mrb, element, false);
+  } else {
+    raise_simdjson_error(mrb, code);
+    return mrb_undef_value();
   }
-
-  return convert_element(mrb, result.value(), symbolize_names);
 }
 
 static mrb_value mrb_json_parse_m(mrb_state *mrb, mrb_value self) {
   mrb_value str;
+  mrb_value dom_parser = mrb_undef_value();
   mrb_value kw_values[1] = {
       mrb_undef_value()}; // default value for symbolize_names
   mrb_sym kw_names[] = {MRB_SYM(symbolize_names)};
@@ -312,7 +350,8 @@ static mrb_value mrb_json_parse_m(mrb_state *mrb, mrb_value self) {
                        0, // required: none required
                        kw_names, kw_values, NULL};
 
-  mrb_get_args(mrb, "S:", &str, &kwargs);
+
+  mrb_get_args(mrb, "S|o:", &str, &dom_parser, &kwargs);
 
   // Fallback default
   mrb_bool symbolize_names = FALSE;
@@ -320,12 +359,27 @@ static mrb_value mrb_json_parse_m(mrb_state *mrb, mrb_value self) {
     symbolize_names = mrb_bool(kw_values[0]); // cast to mrb_bool
   }
 
-  return mrb_json_parse(mrb, str, symbolize_names);
-}
+  if (mrb_undef_p(dom_parser)) {
+      dom_parser = mrb_obj_new(
+      mrb,
+      mrb_class_get_under_id(mrb, mrb_class_ptr(self), MRB_SYM(DomParser)),
+      0, NULL
+    );
+  }
 
-#ifndef MRB_STR_LENGTH_MAX
-#define MRB_STR_LENGTH_MAX 1048576
-#endif
+  dom::parser *parser = mrb_cpp_get<dom::parser>(mrb, dom_parser);
+  padded_string jsonbuffer;
+  auto view = simdjson_safe_view_from_mrb_string(mrb, str, jsonbuffer);
+  dom::element element;
+  auto code = parser->parse(view).get(element);
+
+  if (likely(code == SUCCESS)) {
+    return convert_element(mrb, element, symbolize_names);
+  } else {
+    raise_simdjson_error(mrb, code);
+    return mrb_undef_value();
+  }
+}
 
 MRB_CPP_DEFINE_TYPE(ondemand::parser, ondemand_parser);
 MRB_CPP_DEFINE_TYPE(padded_string, padded_string);
@@ -507,7 +561,7 @@ mrb_padded_string_view_initialize(mrb_state *mrb, mrb_value self)
 }
 
 static mrb_value
-mrb_json_doc_initialize(mrb_state *mrb, mrb_value self)
+mrb_ondemand_document_initialize(mrb_state *mrb, mrb_value self)
 {
   mrb_value view_obj;
   mrb_value parser_obj = mrb_undef_value();
@@ -519,7 +573,7 @@ mrb_json_doc_initialize(mrb_state *mrb, mrb_value self)
   if (mrb_undef_p(parser_obj)) {
     parser_obj = mrb_obj_new(
       mrb,
-      mrb_class_get_under_id(mrb, json_mod, MRB_SYM(Parser)),
+      mrb_class_get_under_id(mrb, json_mod, MRB_SYM(OndemandParser)),
       0, NULL
     );
   }
@@ -554,7 +608,7 @@ mrb_json_parse_lazy(mrb_state *mrb, mrb_value self)
   if (mrb_undef_p(parser_obj)) {
     parser_obj = mrb_obj_new(
       mrb,
-      mrb_class_get_under_id(mrb, json_mod, MRB_SYM(Parser)),
+      mrb_class_get_under_id(mrb, json_mod, MRB_SYM(OndemandParser)),
       0, NULL
     );
   }
@@ -590,7 +644,7 @@ mrb_json_load_lazy(mrb_state *mrb, mrb_value self)
   if (mrb_undef_p(parser_obj)) {
     parser_obj = mrb_obj_new(
       mrb,
-      mrb_class_get_under_id(mrb, json_mod, MRB_SYM(Parser)),
+      mrb_class_get_under_id(mrb, json_mod, MRB_SYM(OndemandParser)),
       0, NULL
     );
   }
@@ -816,7 +870,7 @@ mrb_json_doc_fetch(mrb_state* mrb, mrb_value self)
 
     if (is_lookup_miss(code)) {
       if (!mrb_undef_p(default_val)) return default_val;
-      if (mrb_proc_p(block)) return mrb_yield(mrb, block, key_or_index);
+      if (mrb_proc_p(block)) return mrb_yield_cont(mrb, block, self, 1, &key_or_index);
       mrb_raise(mrb, E_INDEX_ERROR, "index not found");
     }
 
@@ -953,9 +1007,11 @@ mrb_json_doc_at_path_with_wildcard(mrb_state* mrb, mrb_value self)
   auto *const doc = mrb_json_doc_get(mrb, self);
 
   std::string_view json_path(RSTRING_PTR(path_val), RSTRING_LEN(path_val));
-  std::vector<ondemand::value> values;
-  auto code = doc->at_path_with_wildcard(json_path).get(values);
+
+  auto result = doc->at_path_with_wildcard(json_path);
+  auto code = result.error();
   if (likely(code == SUCCESS)) {
+    auto values = result.value();
     if (mrb_proc_p(block)) {
       int arena = mrb_gc_arena_save(mrb);
       for (auto v : values) {
@@ -964,7 +1020,7 @@ mrb_json_doc_at_path_with_wildcard(mrb_state* mrb, mrb_value self)
       }
       return self;
     } else {
-      mrb_value ary = mrb_ary_new_capa(mrb, values.size());
+      mrb_value ary = mrb_ary_new(mrb);
       int arena = mrb_gc_arena_save(mrb);
       for (auto v : values) {
         mrb_ary_push(mrb, ary, convert_ondemand_value_to_mrb(mrb, v));
@@ -1115,9 +1171,9 @@ mrb_json_doc_reiterate(mrb_state *mrb, mrb_value self)
 class MrubyDeserialize {
 public:
   mrb_state *mrb;
-  mrb_value self;
+  mrb_value into;
 
-  explicit MrubyDeserialize(mrb_state *mrb, mrb_value self) : mrb(mrb), self(self) {}
+  explicit MrubyDeserialize(mrb_state *mrb, mrb_value into) : mrb(mrb), into(into) {}
 };
 
 static inline bool valid_schema_entry(mrb_state *mrb,
@@ -1127,6 +1183,7 @@ static inline bool valid_schema_entry(mrb_state *mrb,
     return true;
   } else {
     mrb_raise(mrb, E_TYPE_ERROR, "schema isn't symbols and integers");
+    return false;
   }
 }
 
@@ -1148,12 +1205,10 @@ static inline bool strip_leading_ats(std::string_view &sv) {
   size_t i = 0;
 
   // Entfernt ALLE '@' am Anfang
-  while (i < n && sv[i] == '@') {
-    i++;
-  }
+  for (;i < n && sv[i] == '@'; ++i);
 
   sv.remove_prefix(i);
-  return true; // für deinen if-likely-Chain
+  return true; // für den if-likely-Chain
 }
 
 static inline bool lookup_field(ondemand::object *obj,
@@ -1195,19 +1250,19 @@ auto tag_invoke(deserialize_tag, simdjson_value &val, MrubyDeserialize& mruby) {
   }
 
   mrb_state *mrb = mruby.mrb;
-  mrb_value self = mruby.self;
+  mrb_value into = mruby.into;
 
-  struct RClass *klass = mrb_class(mrb, self);
+  struct RClass *klass = mrb_class(mrb, into);
   mrb_value schema = mrb_ned_schema(mrb, klass);
   if (unlikely(!mrb_hash_p(schema))) {
     mrb_raise(mrb, E_TYPE_ERROR, "schema is not a hash");
   }
 
   struct Ctx {
-    mrb_value self;
+    mrb_value into;
     object *obj;
     error_code error = INCORRECT_TYPE;
-  } ctx{self, &obj};
+  } ctx{into, &obj};
 
   mrb_hash_foreach(
     mrb,
@@ -1215,9 +1270,9 @@ auto tag_invoke(deserialize_tag, simdjson_value &val, MrubyDeserialize& mruby) {
     [](mrb_state *mrb, mrb_value key, mrb_value expected_type, void *data) -> int {
 
       auto *ctx = static_cast<Ctx*>(data);
-      json_type type;
-      value json_field;
       std::string_view sv;
+      value json_field;
+      json_type type;
 
       if (likely(
             valid_schema_entry(mrb, key, expected_type) &&
@@ -1228,7 +1283,7 @@ auto tag_invoke(deserialize_tag, simdjson_value &val, MrubyDeserialize& mruby) {
             types_match(mrb, type, expected_type)
       )) {
           mrb_value ruby_value = convert_ondemand_value_to_mrb(mrb, json_field);
-          mrb_iv_set(mrb, ctx->self, mrb_symbol(key), ruby_value);
+          mrb_iv_set(mrb, ctx->into, mrb_symbol(key), ruby_value);
           ctx->error = SUCCESS;
           return 0;
       } else {
@@ -1541,7 +1596,7 @@ void mrb_mruby_fast_json_gem_init(mrb_state *mrb) {
   DEFINE_JSON_ERROR(Unexpected);
 
   mrb_define_module_function_id(mrb, json_mod, MRB_SYM(parse), mrb_json_parse_m,
-                             MRB_ARGS_REQ(1) | MRB_ARGS_KEY(1, 0));
+                             MRB_ARGS_ARG(1, 1) | MRB_ARGS_KEY(1, 0));
   mrb_define_module_function_id(mrb, json_mod, MRB_SYM(dump), mrb_json_dump_m,
                              MRB_ARGS_REQ(1));
   mrb_define_module_function_id(mrb, json_mod, MRB_SYM(parse_lazy), mrb_json_parse_lazy,
@@ -1575,17 +1630,31 @@ void mrb_mruby_fast_json_gem_init(mrb_state *mrb) {
                        mrb_symbol_to_json, MRB_ARGS_NONE());
 
   //
-  // JSON::Parser
+  // JSON::DomParser
   //
-  struct RClass *parser_cls =
-    mrb_define_class_under_id(mrb, json_mod, MRB_SYM(Parser), mrb->object_class);
-  MRB_SET_INSTANCE_TT(parser_cls, MRB_TT_CDATA);
+  struct RClass *dom_parser_cls =
+    mrb_define_class_under_id(mrb, json_mod, MRB_SYM(DomParser), mrb->object_class);
+  MRB_SET_INSTANCE_TT(dom_parser_cls, MRB_TT_CDATA);
 
-  mrb_define_method_id(mrb, parser_cls, MRB_SYM(initialize),
+  mrb_define_method_id(mrb, dom_parser_cls, MRB_SYM(initialize),
+                       mrb_dom_parser_initialize, MRB_ARGS_OPT(1));
+  mrb_define_method_id(mrb, dom_parser_cls, MRB_SYM(allocate),
+                       mrb_dom_parser_allocate, MRB_ARGS_OPT(1));
+  mrb_define_method_id(mrb, dom_parser_cls, MRB_SYM(parse),
+                       mrb_dom_parser_parse, MRB_ARGS_REQ(1));
+
+  //
+  // JSON::OndemandParser
+  //
+  struct RClass *ondemand_parser_cls =
+    mrb_define_class_under_id(mrb, json_mod, MRB_SYM(OndemandParser), mrb->object_class);
+  MRB_SET_INSTANCE_TT(ondemand_parser_cls, MRB_TT_CDATA);
+
+  mrb_define_method_id(mrb, ondemand_parser_cls, MRB_SYM(initialize),
                        mrb_ondemand_parser_initialize, MRB_ARGS_OPT(1));
-  mrb_define_method_id(mrb, parser_cls, MRB_SYM(allocate),
+  mrb_define_method_id(mrb, ondemand_parser_cls, MRB_SYM(allocate),
                        mrb_ondemand_parser_allocate, MRB_ARGS_OPT(1));
-  mrb_define_method_id(mrb, parser_cls, MRB_SYM(iterate),
+  mrb_define_method_id(mrb, ondemand_parser_cls, MRB_SYM(iterate),
                        mrb_ondemand_parser_iterate, MRB_ARGS_REQ(1));
 
   //
@@ -1614,7 +1683,7 @@ void mrb_mruby_fast_json_gem_init(mrb_state *mrb) {
   MRB_SET_INSTANCE_TT(doc_cls, MRB_TT_CDATA);
 
   mrb_define_method_id(mrb, doc_cls, MRB_SYM(initialize),
-                      mrb_json_doc_initialize, MRB_ARGS_ARG(1, 1));
+                      mrb_ondemand_document_initialize, MRB_ARGS_ARG(1, 1));
   mrb_define_method_id(mrb, doc_cls, MRB_OPSYM(aref),
                       mrb_json_doc_aref, MRB_ARGS_REQ(1));
   mrb_define_method_id(mrb, doc_cls, MRB_SYM(find_field),

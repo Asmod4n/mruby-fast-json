@@ -305,17 +305,27 @@ assert("JSON.parse_lazy - lookup miss returns nil") do
   assert_nil doc["missing"]
 end
 
-assert("JSON.parse_lazy - fetch raises KeyError") do
-  doc = JSON.parse_lazy('{"a":1}')
-  assert_raise KeyError do
-    doc.fetch("missing")
-  end
-end
-
 assert("JSON.parse_lazy - fetch index raises IndexError") do
   doc = JSON.parse_lazy('[1,2,3]')
   assert_raise IndexError do
     doc.fetch(10)
+  end
+end
+
+assert("JSON.parse_lazy - fetch with block") do
+  doc = JSON.parse_lazy('{"a":1}')
+  assert_equal "i dont exist", doc.fetch("missing") {|key| "i dont exist"}
+end
+
+assert("JSON.parse_lazy - fetch with default value") do
+  doc = JSON.parse_lazy('{"a":1}')
+  assert_equal "i dont exist either", doc.fetch("missing", "i dont exist either")
+end
+
+assert("JSON.parse_lazy - fetch raises KeyError") do
+  doc = JSON.parse_lazy('{"a":1}')
+  assert_raise KeyError do
+    doc.fetch("missing")
   end
 end
 
@@ -376,29 +386,38 @@ assert("JSON.load_lazy - loads file lazily") do
   File.new("tmp.json", "w").write('{"x":123}')
   doc = JSON.load_lazy("tmp.json")
   assert_equal 123, doc["x"]
+ensure
+  File.delete "tmp.json"
 end
 
 assert("JSON.load_lazy - large file streaming") do
   File.new("tmp2.json", "w").write('{"items":[1,2,3,4]}')
   doc = JSON.load_lazy("tmp2.json")
   assert_equal [1,2,3,4], doc["items"]
+ensure
+  File.delete "tmp2.json"
 end
 
 # ---------------------------------------------------------
 # native_ext_deserialize
 # ---------------------------------------------------------
 
-assert("JSON.parse_lazy - native_ext_deserialize simple") do
+assert("JSON.parse_lazy - native_ext_deserialize") do
   class Foo
     attr_accessor :foo
     native_ext_deserialize :@foo, JSON::Type::String
+    class << self
+      attr_accessor :bar
+      native_ext_deserialize :@bar, JSON::Type::String
+    end
   end
 
-  doc = JSON.parse_lazy('{"foo":"hello"}')
-  foo = Foo.new
-  doc.into(foo)
+  doc = JSON.parse_lazy('{"foo":"hello","bar":"bar"}')
+  foo = doc.into(Foo.new)
+  bar = doc.into(Foo)
 
   assert_equal "hello", foo.foo
+  assert_equal "bar", Foo.bar
 end
 
 assert("JSON.parse_lazy - native_ext_deserialize type mismatch") do
@@ -407,7 +426,7 @@ assert("JSON.parse_lazy - native_ext_deserialize type mismatch") do
     native_ext_deserialize :@x, JSON::Type::Number
   end
 
-  doc = JSON.parse_lazy('{"x":"not an int"}')
+  doc = JSON.parse_lazy('{"x":"NaN"}')
   bar = Bar.new
 
   assert_raise TypeError do
