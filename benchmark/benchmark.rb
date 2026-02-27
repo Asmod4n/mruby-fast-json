@@ -3,7 +3,7 @@ $json = File.read('output.json')
 JSON.zero_copy_parsing = true
 
 def measure_json_dump_performance(json_size)
-  parser = JSON::Parser.new(json_size)
+  parser = JSON::OndemandParser.new(json_size)
   parser.allocate(json_size)
   # --- Load (bis doc fertig ist) ---
   puts "Parse start: #{Time.now}"

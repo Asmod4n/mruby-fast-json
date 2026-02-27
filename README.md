@@ -245,7 +245,7 @@ All simdjson errors are mapped to Ruby exceptions:
 - `JSON::NumberError`
 - `JSON::BigIntError`
 - `JSON::UnescapedCharsError`
-- `JSON::ParserInUseError`
+- `JSON::OndemandParserInUseError`
 - …and many more
 
 Lookup misses (`NO_SUCH_FIELD`, `INDEX_OUT_OF_BOUNDS`, etc.) return **nil** for:
@@ -398,7 +398,7 @@ end
 3. **Create a `JSON::PaddedStringView`**
    A lightweight view into the padded buffer.
 
-4. **Create a `JSON::Parser`**
+4. **Create a `JSON::OndemandParser`**
    If none is provided.
 
 5. **Create a `JSON::Document`**
@@ -427,7 +427,7 @@ This avoids building a giant Ruby array and keeps memory usage minimal.
 You can reuse a parser across multiple files:
 
 ```ruby
-parser = JSON::Parser.new
+parser = JSON::OndemandParser.new
 
 doc1 = JSON.load_lazy("file1.json", parser)
 doc2 = JSON.load_lazy("file2.json", parser)
@@ -493,7 +493,7 @@ Use it when:
 Malformed JSON raises specific exceptions:
 
 ```ruby
-JSON.parse('{"a":1,}')        # => JSON::ParserError
+JSON.parse('{"a":1,}')        # => JSON::OndemandParserError
 JSON.parse('"unterminated')   # => JSON::UnclosedStringError
 JSON.parse('tru')             # => JSON::TAtomError
 JSON.parse('"\xC0"')          # => JSON::StringError

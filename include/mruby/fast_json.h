@@ -63,11 +63,4 @@ MRB_BEGIN_DECL
 
 #define E_JSON_OUT_OF_CAPACITY_ERROR   (mrb_class_get_under(mrb, mrb_module_get(mrb, "JSON"), "OutOfCapacityError"))
 
-
-MRB_API mrb_value
-mrb_json_parse(mrb_state *mrb, mrb_value str, mrb_bool symbolize_names);
-
-MRB_API mrb_value
-mrb_json_dump(mrb_state *mrb, const mrb_value obj);
-
 MRB_END_DECL
