@@ -339,7 +339,6 @@ mrb_dom_parser_initialize(mrb_state *mrb, mrb_value self)
   return self;
 }
 
-
 static mrb_value
 mrb_dom_parser_allocate(mrb_state *mrb, mrb_value self)
 {
@@ -766,26 +765,14 @@ convert_number_from_ondemand(mrb_state *mrb, ondemand::value& v)
   if (likely(code == SUCCESS)) {
     switch (number.get_number_type()) {
       case number_type::floating_point_number: {
-        if (likely(number.is_double())) {
-          return mrb_convert_number(mrb, number.get_double());
-        } else {
-          mrb_raise(mrb, E_TYPE_ERROR, "not a double");
-        }
+        return mrb_convert_number(mrb, number.get_double());
       } break;
       case number_type::signed_integer: {
-        if (likely(number.is_int64())) {
-          return mrb_convert_number(mrb, number.get_int64());
-        } else {
-          mrb_raise(mrb, E_TYPE_ERROR, "not a int64");
-        }
+        return mrb_convert_number(mrb, number.get_int64());
       } break;
 
       case number_type::unsigned_integer: {
-        if (likely(number.is_uint64())) {
-          return mrb_convert_number(mrb, number.get_uint64());
-        } else {
-          mrb_raise(mrb, E_TYPE_ERROR, "not a uint64");
-        }
+        return mrb_convert_number(mrb, number.get_uint64());
       } break;
 
       case number_type::big_integer: {
@@ -1533,29 +1520,11 @@ DEFINE_MRB_TO_JSON(mrb_false_to_json, json_encode_false(sb));
 DEFINE_MRB_TO_JSON(mrb_nil_to_json, json_encode_nil(sb));
 DEFINE_MRB_TO_JSON(mrb_symbol_to_json, json_encode_symbol(mrb, o, sb));
 
-MRB_API mrb_value
-mrb_json_load(mrb_state *mrb, mrb_value path_str, mrb_bool symbolize_names)
-{
-  std::string_view path(RSTRING_PTR(path_str), RSTRING_LEN(path_str));
-  auto res = padded_string::load(path);
-  if (unlikely(res.error() != SUCCESS)) {
-    mrb_sys_fail(mrb, "failed to read file");
-  }
-
-  dom::parser parser;
-  auto result = parser.parse(res.value());
-
-  if (unlikely(result.error() != SUCCESS)) {
-    raise_simdjson_error(mrb, result.error());
-  }
-
-  return convert_element(mrb, result.value(), symbolize_names);
-}
-
 static mrb_value
 mrb_json_load_m(mrb_state *mrb, mrb_value self)
 {
   mrb_value path_str;
+  mrb_value dom_parser = mrb_undef_value();
   mrb_value kw_values[1] = {
       mrb_undef_value()}; // default value for symbolize_names
   mrb_sym kw_names[] = {MRB_SYM(symbolize_names)};
@@ -1563,7 +1532,7 @@ mrb_json_load_m(mrb_state *mrb, mrb_value self)
                        0, // required: none required
                        kw_names, kw_values, NULL};
 
-  mrb_get_args(mrb, "S:", &path_str, &kwargs);
+  mrb_get_args(mrb, "S|o:", &path_str, &dom_parser, &kwargs);
 
   // Fallback default
   mrb_bool symbolize_names = FALSE;
@@ -1571,7 +1540,28 @@ mrb_json_load_m(mrb_state *mrb, mrb_value self)
     symbolize_names = mrb_bool(kw_values[0]); // cast to mrb_bool
   }
 
-  return mrb_json_load(mrb, path_str, symbolize_names);
+  std::string_view path(RSTRING_PTR(path_str), RSTRING_LEN(path_str));
+  auto res = padded_string::load(path);
+  if (unlikely(res.error() != SUCCESS)) {
+    mrb_sys_fail(mrb, "failed to read file");
+  }
+
+  if (mrb_undef_p(dom_parser)) {
+      dom_parser = mrb_obj_new(
+      mrb,
+      mrb_class_get_under_id(mrb, mrb_class_ptr(self), MRB_SYM(DomParser)),
+      0, NULL
+    );
+  }
+
+  dom::parser *parser = mrb_cpp_get<dom::parser>(mrb, dom_parser);
+  auto result = parser->parse(res.value());
+
+  if (unlikely(result.error() != SUCCESS)) {
+    raise_simdjson_error(mrb, result.error());
+  }
+
+  return convert_element(mrb, result.value(), symbolize_names);
 }
 
 MRB_BEGIN_DECL
@@ -1646,10 +1636,10 @@ void mrb_mruby_fast_json_gem_init(mrb_state *mrb) {
                              MRB_ARGS_REQ(1));
   mrb_define_module_function_id(mrb, json_mod, MRB_SYM(parse_lazy), mrb_json_parse_lazy,
                              MRB_ARGS_ARG(1, 1));
-    mrb_define_module_function_id(mrb, json_mod, MRB_SYM(load_lazy), mrb_json_load_lazy,
+    mrb_define_module_function_id(mrb, json_mod, MRB_SYM(load_file_lazy), mrb_json_load_lazy,
                              MRB_ARGS_ARG(1, 1));
-  mrb_define_module_function_id(mrb, json_mod, MRB_SYM(load), mrb_json_load_m,
-                             MRB_ARGS_REQ(1) | MRB_ARGS_KEY(1, 0));
+  mrb_define_module_function_id(mrb, json_mod, MRB_SYM(load_file), mrb_json_load_m,
+                             MRB_ARGS_ARG(1, 1) | MRB_ARGS_KEY(1, 0));
 
   mrb_define_method_id(mrb, mrb->object_class, MRB_SYM(to_json), mrb_json_dump,
                        MRB_ARGS_NONE());

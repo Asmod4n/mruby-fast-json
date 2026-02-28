@@ -379,20 +379,20 @@ assert("JSON.parse_lazy - rewind allows re-reading") do
 end
 
 # ---------------------------------------------------------
-# load_lazy (file loading)
+# load_file_lazy (file loading)
 # ---------------------------------------------------------
 
-assert("JSON.load_lazy - loads file lazily") do
+assert("JSON.load_file_lazy - loads file lazily") do
   File.new("tmp.json", "w").write('{"x":123}')
-  doc = JSON.load_lazy("tmp.json")
+  doc = JSON.load_file_lazy("tmp.json")
   assert_equal 123, doc["x"]
 ensure
   File.delete "tmp.json"
 end
 
-assert("JSON.load_lazy - large file streaming") do
+assert("JSON.load_file_lazy - large file streaming") do
   File.new("tmp2.json", "w").write('{"items":[1,2,3,4]}')
-  doc = JSON.load_lazy("tmp2.json")
+  doc = JSON.load_file_lazy("tmp2.json")
   assert_equal [1,2,3,4], doc["items"]
 ensure
   File.delete "tmp2.json"
