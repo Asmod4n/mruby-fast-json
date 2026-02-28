@@ -16,7 +16,7 @@ def measure_json_dump_performance(json_size)
   parse_timer = Chrono::Timer.new
   data = doc.at(1048)
   parse_elapsed = parse_timer.elapsed
-  mrb_raise "returned nil" if data.nil?
+  raise "returned nil" if data.nil?
 
   # --- Dump repeatedly for 1 second ---
   puts "Dump start: #{Time.now}"
