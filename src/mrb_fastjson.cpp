@@ -88,91 +88,6 @@ simdjson_safe_view_from_mrb_string(mrb_state *mrb, mrb_value str,
   return padded_string_view(RSTRING_PTR(str), len, required);
 }
 
-static mrb_value convert_array(mrb_state* mrb,
-                               const dom::element& arr_el,
-                               mrb_bool symbolize_names);
-
-static mrb_value convert_object(mrb_state* mrb,
-                                const dom::element& obj_el,
-                                mrb_bool symbolize_names);
-
-
-static mrb_value convert_element(mrb_state *mrb, const dom::element& el,
-                                 mrb_bool symbolize_names) {
-  using namespace dom;
-  switch (el.type()) {
-  case element_type::ARRAY:
-    return convert_array(mrb, el, symbolize_names);
-
-  case element_type::OBJECT:
-    return convert_object(mrb, el, symbolize_names);
-
-  case element_type::INT64:
-    return mrb_convert_number(mrb, static_cast<int64_t>(el.get<int64_t>()));
-
-  case element_type::UINT64:
-    return mrb_convert_number(mrb, static_cast<uint64_t>(el.get<uint64_t>()));
-
-  case element_type::DOUBLE:
-    return mrb_convert_number(mrb, static_cast<double>(el.get<double>()));
-
-  case element_type::STRING: {
-    std::string_view sv(el);
-    return mrb_str_new(mrb, sv.data(), sv.size());
-  }
-
-  case element_type::BOOL:
-    return mrb_bool_value(el.get_bool());
-
-  case element_type::NULL_VALUE:
-    return mrb_nil_value();
-  default:
-    mrb_raise(mrb, E_TYPE_ERROR, "unknown JSON type");
-    return mrb_undef_value(); // unreachable
-  }
-}
-
-static mrb_value convert_array(mrb_state *mrb, const dom::element& arr_el,
-                               mrb_bool symbolize_names) {
-  dom::array arr = arr_el.get_array();
-  mrb_value ary = mrb_ary_new_capa(mrb, arr.size());
-  int arena_index = mrb_gc_arena_save(mrb);
-  for (dom::element item : arr) {
-    mrb_ary_push(mrb, ary, convert_element(mrb, item, symbolize_names));
-    mrb_gc_arena_restore(mrb, arena_index);
-  }
-  return ary;
-}
-
-using KeyConverterFn = mrb_value (*)(mrb_state *, std::string_view);
-
-static mrb_value convert_key_as_str(mrb_state *mrb, std::string_view sv) {
-  return mrb_str_new(mrb, sv.data(), sv.size());
-}
-
-static mrb_value convert_key_as_sym(mrb_state *mrb, std::string_view sv) {
-  return mrb_symbol_value(mrb_intern(mrb, sv.data(), sv.size()));
-}
-
-static mrb_value convert_object(mrb_state *mrb, const dom::element& obj_el,
-                                mrb_bool symbolize_names) {
-  dom::object obj = obj_el.get_object();
-
-  mrb_value hash = mrb_hash_new_capa(mrb, obj.size());
-  int arena_index = mrb_gc_arena_save(mrb);
-  KeyConverterFn convert_key =
-      symbolize_names ? convert_key_as_sym : convert_key_as_str;
-
-  for (auto &kv : obj) {
-    mrb_value key = convert_key(mrb, kv.key);
-    mrb_value val = convert_element(mrb, kv.value, symbolize_names);
-    mrb_hash_set(mrb, hash, key, val);
-    mrb_gc_arena_restore(mrb, arena_index);
-  }
-
-  return hash;
-}
-
 static void raise_simdjson_error(mrb_state *mrb, const error_code code) {
   const char *msg = error_message(code);
 
@@ -286,6 +201,125 @@ static void raise_simdjson_error(mrb_state *mrb, const error_code code) {
   default:
     mrb_raise(mrb, E_JSON_PARSER_ERROR, msg);
     break;
+  }
+}
+
+static mrb_value convert_array(mrb_state* mrb,
+                               const dom::element& arr_el,
+                               mrb_bool symbolize_names);
+
+static mrb_value convert_object(mrb_state* mrb,
+                                const dom::element& obj_el,
+                                mrb_bool symbolize_names);
+
+
+static mrb_value convert_element(mrb_state *mrb, const dom::element& el,
+                                 mrb_bool symbolize_names) {
+  using namespace dom;
+  error_code code;
+  switch (el.type()) {
+  case element_type::ARRAY:
+    return convert_array(mrb, el, symbolize_names);
+
+  case element_type::OBJECT:
+    return convert_object(mrb, el, symbolize_names);
+
+  case element_type::INT64: {
+    int64_t num;
+    code = el.get_int64().get(num);
+    if (likely(code == SUCCESS))
+      return mrb_convert_number(mrb, num);
+  } break;
+
+
+  case element_type::UINT64: {
+    uint64_t num;
+    code = el.get_uint64().get(num);
+    if (likely(code == SUCCESS))
+      return mrb_convert_number(mrb, num);
+  } break;
+
+  case element_type::DOUBLE: {
+    double num;
+    code = el.get_double().get(num);
+    if (likely(code == SUCCESS))
+      return mrb_convert_number(mrb, num);
+  } break;
+
+  case element_type::STRING: {
+    std::string_view sv;
+    code = el.get_string().get(sv);
+    if (likely(code == SUCCESS))
+      return mrb_str_new(mrb, sv.data(), sv.size());
+
+  } break;
+
+  case element_type::BOOL: {
+    bool boolean;
+    code = el.get_bool().get(boolean);
+    if (likely(code == SUCCESS))
+      return mrb_bool_value(boolean);
+  } break;
+
+  case element_type::NULL_VALUE:
+    return mrb_nil_value();
+  default:
+    mrb_raise(mrb, E_TYPE_ERROR, "unknown JSON type");
+  }
+
+  raise_simdjson_error(mrb, code);
+  return mrb_undef_value(); // unreachable
+}
+
+static mrb_value convert_array(mrb_state *mrb, const dom::element& arr_el,
+                               mrb_bool symbolize_names) {
+  dom::array arr;
+  auto code = arr_el.get_array().get(arr);
+  if (likely(code == SUCCESS)) {
+    mrb_value ary = mrb_ary_new_capa(mrb, arr.size());
+    int idx = mrb_gc_arena_save(mrb);
+    for (dom::element item : arr) {
+      mrb_ary_push(mrb, ary, convert_element(mrb, item, symbolize_names));
+      mrb_gc_arena_restore(mrb, idx);
+    }
+    return ary;
+  } else {
+    raise_simdjson_error(mrb, code);
+    return mrb_undef_value();
+  }
+}
+
+using KeyConverterFn = mrb_value (*)(mrb_state *, std::string_view);
+
+static mrb_value convert_key_as_str(mrb_state *mrb, std::string_view sv) {
+  return mrb_str_new(mrb, sv.data(), sv.size());
+}
+
+static mrb_value convert_key_as_sym(mrb_state *mrb, std::string_view sv) {
+  return mrb_symbol_value(mrb_intern(mrb, sv.data(), sv.size()));
+}
+
+static mrb_value convert_object(mrb_state *mrb, const dom::element& obj_el,
+                                mrb_bool symbolize_names) {
+  dom::object obj;
+  auto code = obj_el.get_object().get(obj);
+  if (likely(code == SUCCESS)) {
+    mrb_value hash = mrb_hash_new_capa(mrb, obj.size());
+    int idx = mrb_gc_arena_save(mrb);
+    KeyConverterFn convert_key =
+        symbolize_names ? convert_key_as_sym : convert_key_as_str;
+
+    for (auto &kv : obj) {
+      mrb_value key = convert_key(mrb, kv.key);
+      mrb_value val = convert_element(mrb, kv.value, symbolize_names);
+      mrb_hash_set(mrb, hash, key, val);
+      mrb_gc_arena_restore(mrb, idx);
+    }
+
+    return hash;
+  } else {
+    raise_simdjson_error(mrb, code);
+    return mrb_undef_value();
   }
 }
 
@@ -1196,97 +1230,99 @@ public:
   mrb_value into;
 
   explicit MrubyDeserialize(mrb_state *mrb, mrb_value into) : mrb(mrb), into(into) {}
+
+  bool validate_fields(mrb_value key, mrb_value expected_type, ondemand::object *obj, error_code &err, ondemand::value &json_field)
+  {
+    ondemand::json_type type;
+    std::string_view sv;
+
+    return  likely(valid_schema_entry(key, expected_type, err) &&
+            ivar_to_key(mrb, key, sv, err) &&
+            strip_leading_ats(sv) &&
+            lookup_field(obj, sv, json_field, err) &&
+            get_type(json_field, type, err) &&
+            types_match(type, expected_type, err));
+  }
+private:
+
+  MRB_INLINE bool valid_schema_entry(mrb_value key,
+                                        mrb_value expected,
+                                        error_code &err) {
+    if (likely(mrb_symbol_p(key) && mrb_integer_p(expected))) {
+      return true;
+    } else {
+      err = INCORRECT_TYPE;
+      return false;
+    }
+  }
+
+  MRB_INLINE bool ivar_to_key(mrb_state *mrb, mrb_value key, std::string_view &sv, error_code &err) {
+    mrb_int len;
+    const char *str = mrb_sym_name_len(mrb, mrb_symbol(key), &len);
+    if (likely(str)) {
+      sv = std::string_view(str, len);
+      return true;
+    } else {
+      err = UNEXPECTED_ERROR;
+      return false;
+    }
+  }
+
+  MRB_INLINE bool strip_leading_ats(std::string_view &sv) {
+    size_t n = sv.size();
+    size_t i = 0;
+
+    for (;i < n && sv[i] == '@'; ++i);
+
+    sv.remove_prefix(i);
+    return true;
+  }
+
+  MRB_INLINE bool lookup_field(ondemand::object *obj, std::string_view &sv, ondemand::value &json_field, error_code &err) {
+    err = (*obj)[sv].get(json_field);
+    return likely(err == SUCCESS);
+  }
+
+  MRB_INLINE bool get_type(ondemand::value &json_field, ondemand::json_type &type, error_code &err) {
+    err = json_field.type().get(type);
+    return likely(err == SUCCESS);
+  }
+
+  MRB_INLINE bool types_match(ondemand::json_type actual,
+                                mrb_value expected, error_code &err) {
+    auto underlying = static_cast<std::underlying_type_t<ondemand::json_type>>(actual);
+    if (likely(underlying == mrb_integer(expected))) {
+      return true;
+    } else {
+      err = INCORRECT_TYPE;
+      return false;
+    }
+  }
 };
-
-static inline bool valid_schema_entry(mrb_state *mrb,
-                                      mrb_value key,
-                                      mrb_value expected,
-                                      error_code &err) {
-  if (likely(mrb_symbol_p(key) && mrb_integer_p(expected))) {
-    return true;
-  } else {
-    err = INCORRECT_TYPE;
-    //mrb_raise(mrb, E_TYPE_ERROR, "schema isn't symbols and integers");
-    return false;
-  }
-}
-
-
-static inline bool ivar_to_key(mrb_state *mrb, mrb_value key, std::string_view &out, error_code &err) {
-  mrb_int len;
-  const char *str = mrb_sym_name_len(mrb, mrb_symbol(key), &len);
-  if (likely(str)) {
-    out = std::string_view(str, len);
-    return true;
-  } else {
-    err = UNEXPECTED_ERROR;
-    return false;
-  }
-}
-
-static inline bool strip_leading_ats(std::string_view &sv) {
-  size_t n = sv.size();
-  size_t i = 0;
-
-  for (;i < n && sv[i] == '@'; ++i);
-
-  sv.remove_prefix(i);
-  return true;
-}
-
-static inline bool lookup_field(ondemand::object *obj,
-                         std::string_view sv,
-                         ondemand::value &out,
-                         error_code &err) {
-  err = (*obj)[sv].get(out);
-  return likely(err == SUCCESS);
-}
-
-static inline bool get_type(ondemand::value &v,
-                     ondemand::json_type &out,
-                     error_code &err) {
-  err = v.type().get(out);
-  return likely(err == SUCCESS);
-}
-
-static inline bool types_match(mrb_state *mrb,
-                               ondemand::json_type actual,
-                               mrb_value expected,
-                               error_code &err) {
-  auto underlying = static_cast<std::underlying_type_t<ondemand::json_type>>(actual);
-  if (likely(underlying == mrb_integer(expected))) {
-    return true;
-  } else {
-    err = INCORRECT_TYPE;
-    return false;
-  }
-}
 
 namespace simdjson {
 
 template <typename simdjson_value>
 auto tag_invoke(deserialize_tag, simdjson_value &val, MrubyDeserialize& mruby) {
-  using namespace ondemand;
-  object obj;
-  auto error = val.get_object().get(obj);
-  if (unlikely(error)) {
-    return error;
+  ondemand::object obj;
+  auto err = val.get_object().get(obj);
+  if (unlikely(err != SUCCESS)) {
+    return err;
   }
 
   mrb_state *mrb = mruby.mrb;
-  mrb_value into = mruby.into;
 
-  struct RClass *klass = mrb_class(mrb, into);
+  struct RClass *klass = mrb_class(mrb, mruby.into);
   mrb_value schema = mrb_ned_schema(mrb, klass);
   if (unlikely(!mrb_hash_p(schema))) {
     return INCORRECT_TYPE;
   }
 
   struct Ctx {
-    mrb_value into;
-    object *obj;
-    error_code error = SUCCESS;
-  } ctx{into, &obj};
+    MrubyDeserialize *mruby;
+    ondemand::object *obj;
+    error_code err = SUCCESS;
+  } ctx{&mruby, &obj};
 
   mrb_hash_foreach(
     mrb,
@@ -1294,20 +1330,10 @@ auto tag_invoke(deserialize_tag, simdjson_value &val, MrubyDeserialize& mruby) {
     [](mrb_state *mrb, mrb_value key, mrb_value expected_type, void *data) -> int {
 
       auto *ctx = static_cast<Ctx*>(data);
-      std::string_view sv;
-      value json_field;
-      json_type type;
-
-      if (likely(
-            valid_schema_entry(mrb, key, expected_type, ctx->error) &&
-            ivar_to_key(mrb, key, sv, ctx->error) &&
-            strip_leading_ats(sv) &&
-            lookup_field(ctx->obj, sv, json_field, ctx->error) &&
-            get_type(json_field, type, ctx->error) &&
-            types_match(mrb, type, expected_type, ctx->error)
-      )) {
+      ondemand::value json_field;
+      if (likely(ctx->mruby->validate_fields(key, expected_type, ctx->obj, ctx->err, json_field))) {
           mrb_value ruby_value = convert_ondemand_value_to_mrb(mrb, json_field);
-          mrb_iv_set(mrb, ctx->into, mrb_symbol(key), ruby_value);
+          mrb_iv_set(mrb, ctx->mruby->into, mrb_symbol(key), ruby_value);
           return 0;
       } else {
         return 1;
@@ -1316,7 +1342,7 @@ auto tag_invoke(deserialize_tag, simdjson_value &val, MrubyDeserialize& mruby) {
     &ctx
   );
 
-  return ctx.error;
+  return ctx.err;
 }
 
 } // namespace simdjson
