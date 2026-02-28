@@ -1082,19 +1082,14 @@ mrb_json_doc_array_each(mrb_state* mrb, mrb_value self)
       }
       return self;
     } else {
-      size_t capa;
-      code = array.count_elements().get(capa);
-      if (likely(code == SUCCESS)) {
-        mrb_value ary = mrb_ary_new_capa(mrb, capa);
-        int arena = mrb_gc_arena_save(mrb);
-        for (ondemand::value v : array) {
-          mrb_value ruby_val = convert_ondemand_value_to_mrb(mrb, v);
-          mrb_ary_push(mrb, ary, ruby_val);
-          mrb_gc_arena_restore(mrb, arena);
-        }
-        return ary;
+      mrb_value ary = mrb_ary_new(mrb);
+      int arena = mrb_gc_arena_save(mrb);
+      for (ondemand::value v : array) {
+        mrb_value ruby_val = convert_ondemand_value_to_mrb(mrb, v);
+        mrb_ary_push(mrb, ary, ruby_val);
+        mrb_gc_arena_restore(mrb, arena);
       }
-      raise_simdjson_error(mrb, code);
+      return ary;
     }
   }
 
@@ -1144,9 +1139,8 @@ mrb_json_doc_object_each(mrb_state* mrb, mrb_value self)
         std::string_view k;
         ondemand::value v;
         code = field.unescaped_key().get(k);
-        if (likely(code == SUCCESS)) {
+        if (likely(code == SUCCESS))
           code = field.value().get(v);
-        }
         if (likely(code == SUCCESS)) {
 
           mrb_value key = mrb_str_new(mrb, k.data(), k.size());
@@ -1212,7 +1206,7 @@ static inline bool valid_schema_entry(mrb_state *mrb,
     return true;
   } else {
     err = INCORRECT_TYPE;
-    mrb_raise(mrb, E_TYPE_ERROR, "schema isn't symbols and integers");
+    //mrb_raise(mrb, E_TYPE_ERROR, "schema isn't symbols and integers");
     return false;
   }
 }
@@ -1226,7 +1220,6 @@ static inline bool ivar_to_key(mrb_state *mrb, mrb_value key, std::string_view &
     return true;
   } else {
     err = UNEXPECTED_ERROR;
-    mrb_raise(mrb, E_RUNTIME_ERROR, "can't get sym string");
     return false;
   }
 }
@@ -1235,11 +1228,10 @@ static inline bool strip_leading_ats(std::string_view &sv) {
   size_t n = sv.size();
   size_t i = 0;
 
-  // Entfernt ALLE '@' am Anfang
   for (;i < n && sv[i] == '@'; ++i);
 
   sv.remove_prefix(i);
-  return true; // für den if-likely-Chain
+  return true;
 }
 
 static inline bool lookup_field(ondemand::object *obj,
@@ -1266,7 +1258,6 @@ static inline bool types_match(mrb_state *mrb,
     return true;
   } else {
     err = INCORRECT_TYPE;
-    mrb_raise(mrb, E_TYPE_ERROR, "JSON isn't expected type");
     return false;
   }
 }
@@ -1288,7 +1279,7 @@ auto tag_invoke(deserialize_tag, simdjson_value &val, MrubyDeserialize& mruby) {
   struct RClass *klass = mrb_class(mrb, into);
   mrb_value schema = mrb_ned_schema(mrb, klass);
   if (unlikely(!mrb_hash_p(schema))) {
-    mrb_raise(mrb, E_TYPE_ERROR, "schema is not a hash");
+    return INCORRECT_TYPE;
   }
 
   struct Ctx {
@@ -1324,12 +1315,8 @@ auto tag_invoke(deserialize_tag, simdjson_value &val, MrubyDeserialize& mruby) {
     },
     &ctx
   );
-  if (likely(ctx.error == SUCCESS)) {
-    return SUCCESS;
-  } else {
-    raise_simdjson_error(mrb, ctx.error);
-    return ctx.error;
-  }
+
+  return ctx.error;
 }
 
 } // namespace simdjson
