@@ -850,10 +850,9 @@ mrb_json_doc_get(mrb_state* mrb, mrb_value self)
 static bool
 is_lookup_miss(simdjson::error_code code)
 {
-  return code == NO_SUCH_FIELD ||
-         code == OUT_OF_BOUNDS ||
-         code == INDEX_OUT_OF_BOUNDS ||
-         code == INCORRECT_TYPE;
+  return code == INDEX_OUT_OF_BOUNDS ||
+         code == NO_SUCH_FIELD ||
+         code == OUT_OF_BOUNDS;
 }
 
 static mrb_value
