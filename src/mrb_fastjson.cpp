@@ -544,17 +544,11 @@ mrb_padded_string_s_load(mrb_state *mrb, mrb_value self)
   auto *ps = mrb_cpp_get<padded_string>(mrb, ps_obj);
   *ps = std::move(loaded);
 
-  // 3. Create padded_string_view from the padded_string
-  padded_string_view psv(*ps);
-
   // 4. Create Ruby PaddedStringView object
   struct RClass *psv_class =
     mrb_class_get_under_id(mrb, json_mod, MRB_SYM(PaddedStringView));
 
-  mrb_value view_obj = mrb_obj_new(mrb, psv_class, 0, NULL);
-  auto *view_cpp = mrb_cpp_get<padded_string_view>(mrb, view_obj);
-  *view_cpp = std::move(psv);
-
+  mrb_value view_obj = mrb_obj_new(mrb, psv_class, 1, &ps_obj);
   // 5. Store the padded_string inside the view for lifetime safety
   mrb_iv_set(mrb, view_obj, MRB_SYM(buf), ps_obj);
 
@@ -617,6 +611,7 @@ mrb_ondemand_document_initialize(mrb_state *mrb, mrb_value self)
     // Store Ruby ivars for rehydration later
     mrb_iv_set(mrb, self, MRB_SYM(view), view_obj);
     mrb_iv_set(mrb, self, MRB_SYM(parser), parser_obj);
+    mrb_iv_set(mrb, self, MRB_SYM(cache), mrb_hash_new(mrb));
 
     return self;
   }
@@ -736,7 +731,7 @@ convert_ondemand_object(mrb_state* mrb, ondemand::value &object)
     for (auto field : obj) {
       std::string_view k;
       ondemand::value v;
-      code = field.unescaped_key().get(k);
+      code = field.escaped_key().get(k);
       if (likely(code == SUCCESS))
         code = field.value().get(v);
       if (likely(code == SUCCESS)) {
@@ -881,13 +876,20 @@ mrb_json_doc_aref(mrb_state* mrb, mrb_value self)
 {
   mrb_value key;
   mrb_get_args(mrb, "S", &key);
+  mrb_value cache = mrb_iv_get(mrb, self, MRB_SYM(cache));
+  mrb_value value = mrb_hash_fetch(mrb, cache, key, mrb_undef_value());
+  if (!mrb_undef_p(value)) return value;
 
-  auto *const doc = mrb_json_doc_get(mrb, self);
+  auto * doc = mrb_json_doc_get(mrb, self);
 
   std::string_view k(RSTRING_PTR(key), RSTRING_LEN(key));
   ondemand::value val;
   auto code = (*doc)[k].get(val);
-  if (likely(code == SUCCESS)) return convert_ondemand_value_to_mrb(mrb, val);
+  if (likely(code == SUCCESS)) {
+    value = convert_ondemand_value_to_mrb(mrb, val);
+    mrb_hash_set(mrb, cache, key, value);
+    return value;
+  }
 
   if (is_lookup_miss(code))  return mrb_nil_value();
 
@@ -904,8 +906,10 @@ mrb_json_doc_fetch(mrb_state* mrb, mrb_value self)
 
   // accept any object as first arg, optional default, optional block
   mrb_get_args(mrb, "o|o&", &key_or_index, &default_val, &block);
-
-  auto *const doc = mrb_json_doc_get(mrb, self);
+  mrb_value cache = mrb_iv_get(mrb, self, MRB_SYM(cache));
+  mrb_value value = mrb_hash_fetch(mrb, cache, key_or_index, mrb_undef_value());
+  if (!mrb_undef_p(value)) return value;
+  auto * doc = mrb_json_doc_get(mrb, self);
 
   // If first arg is an Integer -> array index path
   if (mrb_integer_p(key_or_index)) {
@@ -914,7 +918,9 @@ mrb_json_doc_fetch(mrb_state* mrb, mrb_value self)
     auto code = doc->at(static_cast<size_t>(idx)).get(val);
 
     if (likely(code == SUCCESS)) {
-      return convert_ondemand_value_to_mrb(mrb, val);
+      value = convert_ondemand_value_to_mrb(mrb, val);
+      mrb_hash_set(mrb, cache, key_or_index, value);
+      return value;
     }
 
     if (is_lookup_miss(code)) {
@@ -934,7 +940,9 @@ mrb_json_doc_fetch(mrb_state* mrb, mrb_value self)
   auto code = (*doc)[k].get(val);
 
   if (likely(code == SUCCESS)) {
-    return convert_ondemand_value_to_mrb(mrb, val);
+    value = convert_ondemand_value_to_mrb(mrb, val);
+    mrb_hash_set(mrb, cache, key_or_index, value);
+    return value;
   }
 
   if (is_lookup_miss(code)) {
@@ -952,13 +960,19 @@ mrb_json_doc_find_field(mrb_state* mrb, mrb_value self)
 {
   mrb_value key;
   mrb_get_args(mrb, "S", &key);
-
-  auto *const doc = mrb_json_doc_get(mrb, self);
+  mrb_value cache = mrb_iv_get(mrb, self, MRB_SYM(cache));
+  mrb_value value = mrb_hash_fetch(mrb, cache, key, mrb_undef_value());
+  if (!mrb_undef_p(value)) return value;
+  auto * doc = mrb_json_doc_get(mrb, self);
 
   std::string_view k(RSTRING_PTR(key), RSTRING_LEN(key));
   ondemand::value val;
   const auto code = doc->find_field(k).get(val);
-  if (likely(code == SUCCESS)) return convert_ondemand_value_to_mrb(mrb, val);
+  if (likely(code == SUCCESS)) {
+    value = convert_ondemand_value_to_mrb(mrb, val);
+    mrb_hash_set(mrb, cache, key, value);
+    return value;
+  }
 
   if (is_lookup_miss(code))  return mrb_nil_value();
 
@@ -971,13 +985,19 @@ mrb_json_doc_find_field_unordered(mrb_state* mrb, mrb_value self)
 {
   mrb_value key;
   mrb_get_args(mrb, "S", &key);
-
-  auto *const doc = mrb_json_doc_get(mrb, self);
+  mrb_value cache = mrb_iv_get(mrb, self, MRB_SYM(cache));
+  mrb_value value = mrb_hash_fetch(mrb, cache, key, mrb_undef_value());
+  if (!mrb_undef_p(value)) return value;
+  auto * doc = mrb_json_doc_get(mrb, self);
 
   std::string_view k(RSTRING_PTR(key), RSTRING_LEN(key));
   ondemand::value val;
   auto code = doc->find_field_unordered(k).get(val);
-  if (likely(code == SUCCESS)) return convert_ondemand_value_to_mrb(mrb, val);
+  if (likely(code == SUCCESS)) {
+    value = convert_ondemand_value_to_mrb(mrb, val);
+    mrb_hash_set(mrb, cache, key, value);
+    return value;
+  }
   if (is_lookup_miss(code))  return mrb_nil_value();
 
   raise_simdjson_error(mrb, code);
@@ -987,15 +1007,20 @@ mrb_json_doc_find_field_unordered(mrb_state* mrb, mrb_value self)
 static mrb_value
 mrb_json_doc_at(mrb_state* mrb, mrb_value self)
 {
-  mrb_int index;
-  mrb_get_args(mrb, "i", &index);
-
-  auto *const doc = mrb_json_doc_get(mrb, self);
+  mrb_value index;
+  mrb_get_args(mrb, "o", &index);
+  mrb_value cache = mrb_iv_get(mrb, self, MRB_SYM(cache));
+  mrb_value value = mrb_hash_fetch(mrb, cache, index, mrb_undef_value());
+  if (!mrb_undef_p(value)) return value;
+  auto * doc = mrb_json_doc_get(mrb, self);
 
   ondemand::value val;
-  const auto code = doc->at(index).get(val);
+  mrb_value normalized_index = mrb_ensure_int_type(mrb, index);
+  const auto code = doc->at(mrb_integer(normalized_index)).get(val);
   if (likely(code == SUCCESS)) {
-    return convert_ondemand_value_to_mrb(mrb, val);
+    value = convert_ondemand_value_to_mrb(mrb, val);
+    mrb_hash_set(mrb, cache, index, value);
+    return value;
   }
 
   if (is_lookup_miss(code))  return mrb_nil_value();
@@ -1009,14 +1034,18 @@ mrb_json_doc_at_pointer(mrb_state* mrb, mrb_value self)
 {
   mrb_value ptr_val;
   mrb_get_args(mrb, "S", &ptr_val);
-
-  auto *const doc = mrb_json_doc_get(mrb, self);
+  mrb_value cache = mrb_iv_get(mrb, self, MRB_SYM(cache));
+  mrb_value val = mrb_hash_fetch(mrb, cache, ptr_val, mrb_undef_value());
+  if (!mrb_undef_p(val)) return val;
+  auto * doc = mrb_json_doc_get(mrb, self);
 
   std::string_view json_pointer(RSTRING_PTR(ptr_val), RSTRING_LEN(ptr_val));
   ondemand::value value;
   auto code = doc->at_pointer(json_pointer).get(value);
   if (likely(code == SUCCESS)) {
-    return convert_ondemand_value_to_mrb(mrb, value);
+    val = convert_ondemand_value_to_mrb(mrb, value);
+    mrb_hash_set(mrb, cache, ptr_val, val);
+    return val;
   }
 
   if (is_lookup_miss(code))  return mrb_nil_value();
@@ -1030,14 +1059,18 @@ mrb_json_doc_at_path(mrb_state* mrb, mrb_value self)
 {
   mrb_value path_val;
   mrb_get_args(mrb, "S", &path_val);
-
-  auto *const doc = mrb_json_doc_get(mrb, self);
+  mrb_value cache = mrb_iv_get(mrb, self, MRB_SYM(cache));
+  mrb_value val = mrb_hash_fetch(mrb, cache, path_val, mrb_undef_value());
+  if (!mrb_undef_p(val)) return val;
+  auto * doc = mrb_json_doc_get(mrb, self);
 
   std::string_view json_path(RSTRING_PTR(path_val), RSTRING_LEN(path_val));
   ondemand::value value;
   auto code = doc->at_path(json_path).get(value);
   if (likely(code == SUCCESS)) {
-    return convert_ondemand_value_to_mrb(mrb, value);
+    val = convert_ondemand_value_to_mrb(mrb, value);
+    mrb_hash_set(mrb, cache, path_val, val);
+    return val;
   }
 
   if (is_lookup_miss(code))  return mrb_nil_value();
@@ -1053,7 +1086,7 @@ mrb_json_doc_at_path_with_wildcard(mrb_state* mrb, mrb_value self)
   mrb_value block = mrb_undef_value();
   mrb_get_args(mrb, "S|&", &path_val, &block);
 
-  auto *const doc = mrb_json_doc_get(mrb, self);
+  auto * doc = mrb_json_doc_get(mrb, self);
 
   std::string_view json_path(RSTRING_PTR(path_val), RSTRING_LEN(path_val));
 
@@ -1090,7 +1123,7 @@ mrb_json_doc_array_each(mrb_state* mrb, mrb_value self)
   mrb_value block = mrb_undef_value();
   mrb_get_args(mrb, "|&", &block);
 
-  auto *const doc = mrb_json_doc_get(mrb, self);
+  auto * doc = mrb_json_doc_get(mrb, self);
   ondemand::array array;
   auto code = doc->get_array().get(array);
   if (likely(code == SUCCESS)) {
@@ -1183,7 +1216,7 @@ mrb_json_doc_object_each(mrb_state* mrb, mrb_value self)
 static mrb_value
 mrb_json_doc_rewind(mrb_state* mrb, mrb_value self)
 {
-  auto *const doc = mrb_cpp_get<ondemand::document>(mrb, self);
+  auto * doc = mrb_cpp_get<ondemand::document>(mrb, self);
 
   doc->rewind();
 
@@ -1201,7 +1234,7 @@ mrb_json_doc_reiterate(mrb_state *mrb, mrb_value self)
 
   auto result = parser->iterate(*view);
   if (likely(result.error() == SUCCESS)) {
-    auto *const doc_cpp = mrb_cpp_get<ondemand::document>(mrb, self);
+    auto * doc_cpp = mrb_cpp_get<ondemand::document>(mrb, self);
     *doc_cpp = std::move(result.value());
 
     return self;
