@@ -414,6 +414,7 @@ assert("JSON.parse_lazy - native_ext_deserialize") do
 
   doc = JSON.parse_lazy('{"foo":"hello","bar":"bar"}')
   foo = doc.into(Foo.new)
+  doc.rewind
   bar = doc.into(Foo)
 
   assert_equal "hello", foo.foo
