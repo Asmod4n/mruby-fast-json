@@ -755,29 +755,32 @@ convert_number_from_ondemand(mrb_state *mrb, ondemand::value& v)
 {
   using namespace ondemand;
 
-  number number;
-  auto code = v.get_number().get(number);
+  number_type type;
+  auto code = v.get_number_type().get(type);
   if (likely(code == SUCCESS)) {
-    switch (number.get_number_type()) {
-      case number_type::floating_point_number: {
-        return mrb_convert_number(mrb, number.get_double());
-      } break;
-      case number_type::signed_integer: {
-        return mrb_convert_number(mrb, number.get_int64());
-      } break;
+    if (type == number_type::big_integer) {
+      auto sv = v.raw_json_token();
 
-      case number_type::unsigned_integer: {
-        return mrb_convert_number(mrb, number.get_uint64());
-      } break;
+      return mrb_str_to_integer(mrb, mrb_str_new_static(mrb, sv.data(), sv.size()), 0, 0);
+    }
+    number number;
+    code = v.get_number().get(number);
+    if (likely(code == SUCCESS)) {
+      switch (type) {
+        case number_type::floating_point_number: {
+          return mrb_convert_number(mrb, number.get_double());
+        } break;
+        case number_type::signed_integer: {
+          return mrb_convert_number(mrb, number.get_int64());
+        } break;
 
-      case number_type::big_integer: {
-        auto sv = v.raw_json_token();
+        case number_type::unsigned_integer: {
+          return mrb_convert_number(mrb, number.get_uint64());
+        } break;
 
-        return mrb_str_to_integer(mrb, mrb_str_new_static(mrb, sv.data(), sv.size()), 0, 0);
-      } break;
-
-      default:
-        mrb_raise(mrb, E_JSON_NUMBER_ERROR, "unknown number type");
+        default:
+          mrb_raise(mrb, E_JSON_NUMBER_ERROR, "unknown number type");
+      }
     }
   }
 
