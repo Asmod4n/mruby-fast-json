@@ -27,7 +27,7 @@ MRuby::Gem::Specification.new('mruby-fast-json') do |spec|
   spec.add_dependency 'mruby-bigint'
   spec.add_dependency 'mruby-c-ext-helpers'
   spec.add_dependency 'mruby-chrono'
-  spec.add_dependency 'mruby-native-ext-deserialize', :github => 'Asmod4n/mruby-native-ext-deserialize', branch: "main"
+  spec.add_dependency 'mruby-native-ext-type', :github => 'Asmod4n/mruby-native-ext-type', branch: "main"
   spec.add_dependency 'mruby-benchmark' , :github => 'Asmod4n/mruby-benchmark', branch: "main"
   spec.add_test_dependency 'mruby-io'
   spec.cc.defines  << 'MRB_USE_BIGINT'
@@ -42,12 +42,4 @@ MRuby::Gem::Specification.new('mruby-fast-json') do |spec|
     spec.cxx.flags << '-O3'
     spec.cxx.defines << 'NDEBUG' << '__OPTIMIZE__=1'
   end
-
-  simdjson_src = File.expand_path("#{spec.dir}/deps/simdjson/singleheader", __dir__)
-
-  spec.cxx.include_paths << simdjson_src
-  source_files = %W(
-    #{simdjson_src}/simdjson.cpp
-  )
-  spec.objs += source_files.map { |f| f.relative_path_from(dir).pathmap("#{build_dir}/%X#{spec.exts.object}" ) }
 end

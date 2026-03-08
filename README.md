@@ -121,7 +121,7 @@ The OnDemand API provides:
 - **JSON Pointer support** (`doc.at_pointer("/a/b/0")`)
 - **Streaming iteration** over arrays and objects
 - **Deterministic error handling** mapped to Ruby exceptions
-- **Native deserialization into Ruby objects** via `native_ext_deserialize`
+- **Native deserialization into Ruby objects** via `native_ext_type`
 
 This API is ideal for large JSON documents, streaming workloads, or performance‑critical environments.
 
@@ -270,7 +270,7 @@ You can define a Ruby class with a schema:
 ```ruby
 class Foo
   attr_accessor :foo
-  native_ext_deserialize :@foo, JSON::Type::String
+  native_ext_type :@foo, JSON::Type::String
 end
 ```
 
@@ -340,8 +340,8 @@ Use DOM (`JSON.parse`) when:
 class User
   attr_accessor :id, :name
 
-  native_ext_deserialize :@id,   JSON::Type::Number
-  native_ext_deserialize :@name, JSON::Type::String
+  native_ext_type :@id,   JSON::Type::Number
+  native_ext_type :@name, JSON::Type::String
 end
 
 doc = JSON.load_lazy("users.json")
@@ -456,15 +456,15 @@ doc.fetch("missing")   # => KeyError
 
 ---
 
-## **Integration with native_ext_deserialize**
+## **Integration with native_ext_type**
 
 Lazy documents can be deserialized directly into Ruby objects:
 
 ```ruby
 class User
   attr_reader :id, :name
-  native_ext_deserialize :@id,   JSON::Type::Number
-  native_ext_deserialize :@name, JSON::Type::String
+  native_ext_type :@id,   JSON::Type::Number
+  native_ext_type :@name, JSON::Type::String
 end
 
 doc = JSON.load_lazy("user.json")

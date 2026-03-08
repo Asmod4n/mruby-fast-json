@@ -399,16 +399,16 @@ ensure
 end
 
 # ---------------------------------------------------------
-# native_ext_deserialize
+# native_ext_type
 # ---------------------------------------------------------
 
-assert("JSON.parse_lazy - native_ext_deserialize") do
+assert("JSON.parse_lazy - native_ext_type") do
   class Foo
     attr_accessor :foo
-    native_ext_deserialize :@foo, JSON::Type::String
+    native_ext_type :@foo, JSON::Type::String
     class << self
       attr_accessor :bar
-      native_ext_deserialize :@bar, JSON::Type::String
+      native_ext_type :@bar, JSON::Type::String
     end
   end
 
@@ -421,10 +421,10 @@ assert("JSON.parse_lazy - native_ext_deserialize") do
   assert_equal "bar", Foo.bar
 end
 
-assert("JSON.parse_lazy - native_ext_deserialize type mismatch") do
+assert("JSON.parse_lazy - native_ext_type type mismatch") do
   class Bar
     attr_accessor :x
-    native_ext_deserialize :@x, JSON::Type::Number
+    native_ext_type :@x, JSON::Type::Number
   end
 
   doc = JSON.parse_lazy('{"x":"NaN"}')
@@ -435,11 +435,11 @@ assert("JSON.parse_lazy - native_ext_deserialize type mismatch") do
   end
 end
 
-assert("JSON.parse_lazy - native_ext_deserialize partial match") do
+assert("JSON.parse_lazy - native_ext_type partial match") do
   class Baz
     attr_accessor :a, :b
-    native_ext_deserialize :@a, JSON::Type::Number
-    native_ext_deserialize :@b, JSON::Type::String
+    native_ext_type :@a, JSON::Type::Number
+    native_ext_type :@b, JSON::Type::String
   end
 
   doc = JSON.parse_lazy('{"a":1,"b":"ok"}')
