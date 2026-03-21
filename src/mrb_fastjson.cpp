@@ -765,11 +765,11 @@ static mrb_value mrb_json_doc_reiterate(mrb_state *mrb, mrb_value self) {
 }
 
 // ============================================================================
-// MrubyDeserialize — uses mrb_ned_check_type with Ruby classes
+// MrubyDeserialize — uses mrb_net_check_type with Ruby classes
 //
 // Schema stores { :@ivar => SomeClass } where SomeClass is a Ruby Class or
 // Module. We convert the JSON field to a Ruby value first, then call
-// mrb_ned_check_type (which does is_a? via mrb_obj_is_kind_of) to validate.
+// mrb_net_check_type (which does is_a? via mrb_obj_is_kind_of) to validate.
 // ============================================================================
 
 class MrubyDeserialize {
@@ -804,7 +804,7 @@ public:
     mrb_value ruby_value = convert_ondemand_value_to_mrb(mrb, json_field);
 
     // Type check: schema_class must be a Ruby Class/Module, use is_a?
-    if (likely(mrb_ned_check_type(mrb, schema_class, ruby_value))) {
+    if (likely(mrb_net_check_type(mrb, schema_class, ruby_value))) {
       mrb_iv_set(mrb, into, mrb_symbol(key), ruby_value);
       return true;
     }
