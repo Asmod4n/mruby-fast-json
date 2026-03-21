@@ -270,7 +270,7 @@ You can define a Ruby class with a schema:
 ```ruby
 class Foo
   attr_accessor :foo
-  native_ext_type :@foo, JSON::Type::String
+  native_ext_type :@foo, String
 end
 ```
 
@@ -299,13 +299,6 @@ foo.foo   # => "hello"
 
 This is a **deterministic, explicit, zero‑magic** deserialization pipeline.
 
-Supported Types
-- JSON::Type::Array
-- JSON::Type::Object
-- JSON::Type::Number
-- JSON::Type::String
-- JSON::Type::Boolean
-- JSON::Type::Null
 
 ---
 
@@ -340,8 +333,8 @@ Use DOM (`JSON.parse`) when:
 class User
   attr_accessor :id, :name
 
-  native_ext_type :@id,   JSON::Type::Number
-  native_ext_type :@name, JSON::Type::String
+  native_ext_type :@id,   Integer
+  native_ext_type :@name, String
 end
 
 doc = JSON.load_lazy("users.json")
@@ -463,8 +456,8 @@ Lazy documents can be deserialized directly into Ruby objects:
 ```ruby
 class User
   attr_reader :id, :name
-  native_ext_type :@id,   JSON::Type::Number
-  native_ext_type :@name, JSON::Type::String
+  native_ext_type :@id,   Integer
+  native_ext_type :@name, String
 end
 
 doc = JSON.load_lazy("user.json")
