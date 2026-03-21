@@ -8,7 +8,7 @@ assert("JSON.parse - simple object with symbol keys") do
   obj = JSON.parse('{"name":"Alice","age":30}', symbolize_names: true)
   assert_equal "Alice", obj[:name]
   assert_equal 30, obj[:age]
-  assert_nil obj["name"] # ensure string keys aren't present
+  assert_nil obj["name"]
 end
 
 assert("JSON.parse - nested object with symbol keys") do
@@ -38,7 +38,6 @@ assert("JSON.parse - empty object with symbol keys") do
   obj = JSON.parse('{}', symbolize_names: true)
   assert_equal({}, obj)
 end
-
 
 assert("JSON.parse - valid array of mixed types") do
   arr = JSON.parse('[true, null, 42, "hi"]'.freeze)
@@ -150,49 +149,40 @@ assert("JSON.dump/parse roundtrip preserves UTF-8") do
   }
   json   = JSON.dump(original)
   result = JSON.parse(json)
-
   assert_equal original, result
 end
 
 assert("String#valid_utf8? detects bad sequences") do
-  # raw invalid bytes in JSON literal
   bad_json = "\"\xC0\xAF\""
   assert_raise JSON::UTF8Error do
     JSON.parse(bad_json)
   end
 end
 
-# test/json_escape_paths.rb
-
-# 1. printable ASCII → pass-through
 assert("printable ASCII stays unescaped") do
   inp = "Hello, world!"
   out = JSON.dump(inp)
   assert_equal "\"Hello, world!\"", out
 end
 
-# 2. JSON_ESCAPE_MAPPING chars: quotes and backslashes
 assert("quotes and backslashes get \\\" or \\\\ escapes") do
   inp = "\"\\"
   out = JSON.dump(inp)
   assert_equal "\"\\\"\\\\\"", out
 end
 
-# 3. control chars with dedicated escapes: \b \f \n \r \t
 assert("standard control chars") do
   inp = "\b\f\n\r\t"
   out = JSON.dump(inp)
   assert_equal "\"\\b\\f\\n\\r\\t\"", out
 end
 
-# 4. other C0 controls (<0x20) → \u00XX
 assert("other C0 controls → \\u00XX") do
   inp = "\x01\x02\x1f"
   out = JSON.dump(inp)
   assert_equal "\"\\u0001\\u0002\\u001f\"", out
 end
 
-# 5. mixed ASCII, escapes, C0, and UTF-8 in one string
 assert("mixed ASCII+escapes+C0+UTF-8") do
   utf8 = "λ😀"
   inp  = "\"\b" + utf8 + "\n"
@@ -201,7 +191,6 @@ assert("mixed ASCII+escapes+C0+UTF-8") do
   assert_equal expect, out
 end
 
-# 6. pure multi-byte UTF-8 (no escaping)
 assert("multi-byte UTF-8 passes through unmodified") do
   inp = "δοκιμή Русский 漢字"
   out = JSON.dump(inp)
@@ -209,11 +198,9 @@ assert("multi-byte UTF-8 passes through unmodified") do
 end
 
 assert("JSON.parse - uint64_t larger than INT64_MAX becomes BigInt") do
-  # 2^63 = 9223372036854775808 (INT64_MAX + 1)
   json = '{"big":9223372036854775808}'
   obj = JSON.parse(json)
   val = obj["big"]
-
   assert_equal 9223372036854775808, val
 end
 
@@ -242,19 +229,12 @@ assert("JSON.parse - BigIntError") do
   end
 end
 
-assert("JSON.parse - BigIntError") do
-  huge = '{"x":' + ('9' * 20000) + '}'
-  assert_raise JSON::BigIntError do
-    JSON.parse(huge)
-  end
-end
 assert("JSON.parse - UnescapedCharsError") do
   json = "\"hello\u0001world\""
   assert_raise JSON::UnescapedCharsError do
     JSON.parse(json)
   end
 end
-
 
 # ---------------------------------------------------------
 # JSON.parse_lazy — basic functionality
@@ -285,7 +265,6 @@ assert("JSON.parse_lazy - array access via .at after rewind") do
   assert_equal nil, doc.at(1)
 end
 
-
 assert("JSON.parse_lazy - UTF-8 string") do
   doc = JSON.parse_lazy('{"greeting":"こんにちは"}')
   assert_equal "こんにちは", doc["greeting"]
@@ -295,10 +274,6 @@ assert("JSON.parse_lazy - empty array and object") do
   assert_equal [], JSON.parse_lazy("[]").array_each
   assert_equal({}, JSON.parse_lazy("{}").object_each)
 end
-
-# ---------------------------------------------------------
-# Lookup semantics
-# ---------------------------------------------------------
 
 assert("JSON.parse_lazy - lookup miss returns nil") do
   doc = JSON.parse_lazy('{"a":1}')
@@ -329,10 +304,6 @@ assert("JSON.parse_lazy - fetch raises KeyError") do
   end
 end
 
-# ---------------------------------------------------------
-# JSON Pointer / Path
-# ---------------------------------------------------------
-
 assert("JSON.parse_lazy - at_pointer") do
   doc = JSON.parse_lazy('{"user":{"name":"Alice"}}')
   assert_equal "Alice", doc.at_pointer("/user/name")
@@ -349,10 +320,6 @@ assert("JSON.parse_lazy - at_path_with_wildcard") do
   assert_equal [1,2,3], ids
 end
 
-# ---------------------------------------------------------
-# Iteration
-# ---------------------------------------------------------
-
 assert("JSON.parse_lazy - array_each") do
   doc = JSON.parse_lazy('[1,2,3]')
   out = []
@@ -367,20 +334,12 @@ assert("JSON.parse_lazy - object_each") do
   assert_equal({"a"=>1,"b"=>2}, h)
 end
 
-# ---------------------------------------------------------
-# Rewind
-# ---------------------------------------------------------
-
 assert("JSON.parse_lazy - rewind allows re-reading") do
   doc = JSON.parse_lazy('{"a":1,"b":2}')
   assert_equal 1, doc["a"]
   doc.rewind
   assert_equal 2, doc["b"]
 end
-
-# ---------------------------------------------------------
-# load_file_lazy (file loading)
-# ---------------------------------------------------------
 
 assert("JSON.load_file_lazy - loads file lazily") do
   File.new("tmp.json", "w").write('{"x":123}')
@@ -399,16 +358,21 @@ ensure
 end
 
 # ---------------------------------------------------------
-# native_ext_type
+# native_ext_type — now uses Ruby classes directly
+#
+# String  → any String value
+# Integer → integer numbers (use Numeric if you also want Float)
+# Array   → JSON arrays
+# Hash    → JSON objects
 # ---------------------------------------------------------
 
-assert("JSON.parse_lazy - native_ext_type") do
+assert("JSON.parse_lazy - native_ext_type with Ruby classes") do
   class Foo
     attr_accessor :foo
-    native_ext_type :@foo, JSON::Type::String
+    native_ext_type :@foo, String
     class << self
       attr_accessor :bar
-      native_ext_type :@bar, JSON::Type::String
+      native_ext_type :@bar, String
     end
   end
 
@@ -424,7 +388,8 @@ end
 assert("JSON.parse_lazy - native_ext_type type mismatch") do
   class Bar
     attr_accessor :x
-    native_ext_type :@x, JSON::Type::Number
+    # Integer schema: a string value should fail
+    native_ext_type :@x, Integer
   end
 
   doc = JSON.parse_lazy('{"x":"NaN"}')
@@ -438,8 +403,8 @@ end
 assert("JSON.parse_lazy - native_ext_type partial match") do
   class Baz
     attr_accessor :a, :b
-    native_ext_type :@a, JSON::Type::Number
-    native_ext_type :@b, JSON::Type::String
+    native_ext_type :@a, Integer
+    native_ext_type :@b, String
   end
 
   doc = JSON.parse_lazy('{"a":1,"b":"ok"}')
@@ -448,4 +413,42 @@ assert("JSON.parse_lazy - native_ext_type partial match") do
 
   assert_equal 1, baz.a
   assert_equal "ok", baz.b
+end
+
+assert("JSON.parse_lazy - native_ext_type with Array schema") do
+  class WithArray
+    attr_accessor :items
+    native_ext_type :@items, Array
+  end
+
+  doc = JSON.parse_lazy('{"items":[1,2,3]}')
+  obj = doc.into(WithArray.new)
+  assert_equal [1, 2, 3], obj.items
+end
+
+assert("JSON.parse_lazy - native_ext_type with Hash schema") do
+  class WithHash
+    attr_accessor :meta
+    native_ext_type :@meta, Hash
+  end
+
+  doc = JSON.parse_lazy('{"meta":{"key":"val"}}')
+  obj = doc.into(WithHash.new)
+  assert_equal({ "key" => "val" }, obj.meta)
+end
+
+assert("JSON.parse_lazy - native_ext_type Numeric accepts both int and float") do
+  class WithNumeric
+    attr_accessor :n
+    # Numeric is superclass of both Integer and Float
+    native_ext_type :@n, Numeric
+  end
+
+  doc1 = JSON.parse_lazy('{"n":42}')
+  obj1 = doc1.into(WithNumeric.new)
+  assert_equal 42, obj1.n
+
+  doc2 = JSON.parse_lazy('{"n":3.14}')
+  obj2 = doc2.into(WithNumeric.new)
+  assert_true (obj2.n - 3.14).abs < 0.001
 end
