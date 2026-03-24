@@ -960,17 +960,6 @@ static void json_encode(mrb_state *mrb, mrb_value v, builder::string_builder &bu
   }
 }
 
-MRB_API mrb_value mrb_json_dump(mrb_state *mrb, mrb_value obj) {
-  builder::string_builder sb;
-  json_encode(mrb, obj, sb);
-  if (likely(sb.validate_unicode())) {
-    std::string_view sv = sb.view();
-    return mrb_str_new(mrb, sv.data(), sv.size());
-  }
-  mrb_raise(mrb, E_JSON_UTF8_ERROR, "invalid utf-8");
-  return mrb_undef_value();
-}
-
 static mrb_value mrb_json_dump_m(mrb_state *mrb, mrb_value self) {
   mrb_value obj; mrb_get_args(mrb, "o", &obj);
   return mrb_json_dump(mrb, obj);
@@ -1019,6 +1008,17 @@ static mrb_value mrb_json_load_m(mrb_state *mrb, mrb_value self) {
 }
 
 MRB_BEGIN_DECL
+MRB_API mrb_value mrb_json_dump(mrb_state *mrb, mrb_value obj) {
+  builder::string_builder sb;
+  json_encode(mrb, obj, sb);
+  if (likely(sb.validate_unicode())) {
+    std::string_view sv = sb.view();
+    return mrb_str_new(mrb, sv.data(), sv.size());
+  }
+  mrb_raise(mrb, E_JSON_UTF8_ERROR, "invalid utf-8");
+  return mrb_undef_value();
+}
+
 void mrb_mruby_fast_json_gem_init(mrb_state *mrb) {
 
 #ifdef _WIN32
