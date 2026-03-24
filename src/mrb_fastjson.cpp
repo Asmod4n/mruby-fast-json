@@ -151,6 +151,7 @@ static mrb_value convert_array(mrb_state *mrb, const dom::element& arr_el, mrb_b
   auto code = arr_el.get_array().get(arr);
   if (likely(code == SUCCESS)) {
     mrb_value ary = mrb_ary_new_capa(mrb, arr.size());
+    mrb_gc_protect(mrb, ary);
     int idx = mrb_gc_arena_save(mrb);
     for (dom::element item : arr) {
       mrb_ary_push(mrb, ary, convert_element(mrb, item, symbolize_names));
@@ -171,6 +172,7 @@ static mrb_value convert_object(mrb_state *mrb, const dom::element& obj_el, mrb_
   auto code = obj_el.get_object().get(obj);
   if (likely(code == SUCCESS)) {
     mrb_value hash = mrb_hash_new_capa(mrb, obj.size());
+    mrb_gc_protect(mrb, hash);
     int idx = mrb_gc_arena_save(mrb);
     KeyConverterFn convert_key = symbolize_names ? convert_key_as_sym : convert_key_as_str;
     for (auto &kv : obj) {
@@ -293,6 +295,7 @@ static mrb_value mrb_ondemand_parser_iterate(mrb_state *mrb, mrb_value self) {
   mrb_value arg;
   mrb_get_args(mrb, "S", &arg);
   mrb_value view_obj = make_padded_string_view_from_ruby_str(mrb, arg);
+  mrb_gc_protect(mrb, view_obj);
   struct RClass *json_mod = mrb_module_get_id(mrb, MRB_SYM(JSON));
   mrb_value args[] = {view_obj, self};
   return mrb_obj_new(mrb, mrb_class_get_under_id(mrb, json_mod, MRB_SYM(Document)), 2, args);
@@ -313,9 +316,11 @@ static mrb_value mrb_padded_string_s_load(mrb_state *mrb, mrb_value self) {
   padded_string loaded = padded_string::load(sv);
   struct RClass *json_mod = mrb_module_get_id(mrb, MRB_SYM(JSON));
   mrb_value ps_obj = mrb_obj_new(mrb, mrb_class_ptr(self), 0, NULL);
+  mrb_gc_protect(mrb, ps_obj);
   *mrb_cpp_get<padded_string>(mrb, ps_obj) = std::move(loaded);
   struct RClass *psv_class = mrb_class_get_under_id(mrb, json_mod, MRB_SYM(PaddedStringView));
   mrb_value view_obj = mrb_obj_new(mrb, psv_class, 1, &ps_obj);
+  mrb_gc_protect(mrb, view_obj);
   mrb_iv_set(mrb, view_obj, MRB_SYM(buf), ps_obj);
   return view_obj;
 }
@@ -340,6 +345,7 @@ static mrb_value mrb_ondemand_document_initialize(mrb_state *mrb, mrb_value self
   struct RClass *json_mod = mrb_module_get_id(mrb, MRB_SYM(JSON));
   if (mrb_undef_p(parser_obj))
     parser_obj = mrb_obj_new(mrb, mrb_class_get_under_id(mrb, json_mod, MRB_SYM(OndemandParser)), 0, NULL);
+  mrb_gc_protect(mrb, parser_obj);
   auto *parser = mrb_cpp_get<ondemand::parser>(mrb, parser_obj);
   auto *doc = mrb_cpp_new<ondemand::document>(mrb, self);
   auto code = parser->iterate(*view).get(*doc);
@@ -360,6 +366,7 @@ static mrb_value mrb_json_parse_lazy(mrb_state *mrb, mrb_value self) {
   mrb_value view_obj = make_padded_string_view_from_ruby_str(mrb, str);
   if (mrb_undef_p(parser_obj))
     parser_obj = mrb_obj_new(mrb, mrb_class_get_under_id(mrb, json_mod, MRB_SYM(OndemandParser)), 0, NULL);
+  mrb_gc_protect(mrb, parser_obj);
   mrb_value args[2] = {view_obj, parser_obj};
   return mrb_obj_new(mrb, mrb_class_get_under_id(mrb, json_mod, MRB_SYM(Document)), 2, args);
 }
@@ -371,8 +378,10 @@ static mrb_value mrb_json_load_lazy(mrb_state *mrb, mrb_value self) {
   mrb_value view_obj = mrb_funcall_argv(mrb,
     mrb_obj_value(mrb_class_get_under_id(mrb, json_mod, MRB_SYM(PaddedString))),
     MRB_SYM(load), 1, &path);
+  mrb_gc_protect(mrb, view_obj);
   if (mrb_undef_p(parser_obj))
     parser_obj = mrb_obj_new(mrb, mrb_class_get_under_id(mrb, json_mod, MRB_SYM(OndemandParser)), 0, NULL);
+  mrb_gc_protect(mrb, parser_obj);
   mrb_value args[] = {view_obj, parser_obj};
   return mrb_obj_new(mrb, mrb_class_get_under_id(mrb, json_mod, MRB_SYM(Document)), 2, args);
 }
@@ -387,6 +396,7 @@ static mrb_value convert_ondemand_array(mrb_state* mrb, ondemand::value &array) 
   if (likely(code == SUCCESS)) {
     if (is_empty) return mrb_ary_new(mrb);
     mrb_value ary = mrb_ary_new(mrb);
+    mrb_gc_protect(mrb, ary);
     int arena = mrb_gc_arena_save(mrb);
     for (ondemand::value val : arr) {
       mrb_ary_push(mrb, ary, convert_ondemand_value_to_mrb(mrb, val));
@@ -406,6 +416,7 @@ static mrb_value convert_ondemand_object(mrb_state* mrb, ondemand::value &object
   if (likely(code == SUCCESS)) {
     if (is_empty) return mrb_hash_new(mrb);
     mrb_value hash = mrb_hash_new(mrb);
+    mrb_gc_protect(mrb, hash);
     int arena = mrb_gc_arena_save(mrb);
     for (auto field : obj) {
       std::string_view k;
@@ -414,7 +425,9 @@ static mrb_value convert_ondemand_object(mrb_state* mrb, ondemand::value &object
       if (likely(code == SUCCESS)) code = field.value().get(v);
       if (likely(code == SUCCESS)) {
         mrb_value key = mrb_str_new(mrb, k.data(), k.size());
+        mrb_gc_protect(mrb, key);
         mrb_value val = convert_ondemand_value_to_mrb(mrb, v);
+        mrb_gc_protect(mrb, val);
         mrb_hash_set(mrb, hash, key, val);
         mrb_gc_arena_restore(mrb, arena);
       } else {
@@ -510,6 +523,7 @@ static mrb_value mrb_json_doc_aref(mrb_state* mrb, mrb_value self) {
   auto code = (*doc)[k].get(val);
   if (likely(code == SUCCESS)) {
     value = convert_ondemand_value_to_mrb(mrb, val);
+    mrb_gc_protect(mrb, value);
     mrb_hash_set(mrb, cache, key, value);
     return value;
   }
@@ -530,6 +544,7 @@ static mrb_value mrb_json_doc_fetch(mrb_state* mrb, mrb_value self) {
     auto code = doc->at(static_cast<size_t>(mrb_integer(key_or_index))).get(val);
     if (likely(code == SUCCESS)) {
       value = convert_ondemand_value_to_mrb(mrb, val);
+      mrb_gc_protect(mrb, value);
       mrb_hash_set(mrb, cache, key_or_index, value);
       return value;
     }
@@ -547,6 +562,7 @@ static mrb_value mrb_json_doc_fetch(mrb_state* mrb, mrb_value self) {
   auto code = (*doc)[k].get(val);
   if (likely(code == SUCCESS)) {
     value = convert_ondemand_value_to_mrb(mrb, val);
+    mrb_gc_protect(mrb, value);
     mrb_hash_set(mrb, cache, key_or_index, value);
     return value;
   }
@@ -571,6 +587,7 @@ static mrb_value mrb_json_doc_find_field(mrb_state* mrb, mrb_value self) {
   const auto code = doc->find_field(k).get(val);
   if (likely(code == SUCCESS)) {
     value = convert_ondemand_value_to_mrb(mrb, val);
+    mrb_gc_protect(mrb, value);
     mrb_hash_set(mrb, cache, key, value);
     return value;
   }
@@ -591,6 +608,7 @@ static mrb_value mrb_json_doc_find_field_unordered(mrb_state* mrb, mrb_value sel
   auto code = doc->find_field_unordered(k).get(val);
   if (likely(code == SUCCESS)) {
     value = convert_ondemand_value_to_mrb(mrb, val);
+    mrb_gc_protect(mrb, value);
     mrb_hash_set(mrb, cache, key, value);
     return value;
   }
@@ -611,6 +629,7 @@ static mrb_value mrb_json_doc_at(mrb_state* mrb, mrb_value self) {
   const auto code = doc->at(mrb_integer(normalized_index)).get(val);
   if (likely(code == SUCCESS)) {
     value = convert_ondemand_value_to_mrb(mrb, val);
+    mrb_gc_protect(mrb, value);
     mrb_hash_set(mrb, cache, index, value);
     return value;
   }
@@ -631,6 +650,7 @@ static mrb_value mrb_json_doc_at_pointer(mrb_state* mrb, mrb_value self) {
   auto code = doc->at_pointer(json_pointer).get(value);
   if (likely(code == SUCCESS)) {
     val = convert_ondemand_value_to_mrb(mrb, value);
+    mrb_gc_protect(mrb, val);
     mrb_hash_set(mrb, cache, ptr_val, val);
     return val;
   }
@@ -651,6 +671,7 @@ static mrb_value mrb_json_doc_at_path(mrb_state* mrb, mrb_value self) {
   auto code = doc->at_path(json_path).get(value);
   if (likely(code == SUCCESS)) {
     val = convert_ondemand_value_to_mrb(mrb, value);
+    mrb_gc_protect(mrb, val);
     mrb_hash_set(mrb, cache, path_val, val);
     return val;
   }
@@ -674,6 +695,7 @@ static mrb_value mrb_json_doc_at_path_with_wildcard(mrb_state* mrb, mrb_value se
       return self;
     } else {
       mrb_value ary = mrb_ary_new(mrb);
+      mrb_gc_protect(mrb, ary);
       int arena = mrb_gc_arena_save(mrb);
       for (auto v : values) { mrb_ary_push(mrb, ary, convert_ondemand_value_to_mrb(mrb, v)); mrb_gc_arena_restore(mrb, arena); }
       return ary;
@@ -697,6 +719,7 @@ static mrb_value mrb_json_doc_array_each(mrb_state* mrb, mrb_value self) {
       return self;
     } else {
       mrb_value ary = mrb_ary_new(mrb);
+      mrb_gc_protect(mrb, ary);
       int arena = mrb_gc_arena_save(mrb);
       for (ondemand::value v : array) { mrb_ary_push(mrb, ary, convert_ondemand_value_to_mrb(mrb, v)); mrb_gc_arena_restore(mrb, arena); }
       return ary;
@@ -720,7 +743,11 @@ static mrb_value mrb_json_doc_object_each(mrb_state* mrb, mrb_value self) {
         code = field.unescaped_key().get(k);
         if (likely(code == SUCCESS)) code = field.value().get(v);
         if (likely(code == SUCCESS)) {
-          mrb_value argv[] = {mrb_str_new(mrb, k.data(), k.size()), convert_ondemand_value_to_mrb(mrb, v)};
+          mrb_value key = mrb_str_new(mrb, k.data(), k.size());
+          mrb_gc_protect(mrb, key);
+          mrb_value val = convert_ondemand_value_to_mrb(mrb, v);
+          mrb_gc_protect(mrb, val);
+          mrb_value argv[] = {key, val};
           mrb_yield_argv(mrb, block, 2, argv);
           mrb_gc_arena_restore(mrb, arena);
         } else { raise_simdjson_error(mrb, code); }
@@ -728,6 +755,7 @@ static mrb_value mrb_json_doc_object_each(mrb_state* mrb, mrb_value self) {
       return self;
     } else {
       mrb_value hash = mrb_hash_new(mrb);
+      mrb_gc_protect(mrb, hash);
       int arena = mrb_gc_arena_save(mrb);
       for (auto field : object) {
         std::string_view k; ondemand::value v;
@@ -802,6 +830,7 @@ public:
 
     // Convert JSON -> Ruby value
     mrb_value ruby_value = convert_ondemand_value_to_mrb(mrb, json_field);
+    mrb_gc_protect(mrb, ruby_value);
 
     // Type check: schema_class must be a Ruby Class/Module, use is_a?
     if (likely(mrb_net_check_type(mrb, schema_class, ruby_value))) {
@@ -982,6 +1011,7 @@ static mrb_value mrb_json_load_m(mrb_state *mrb, mrb_value self) {
   if (unlikely(res.error() != SUCCESS)) mrb_sys_fail(mrb, "failed to read file");
   if (mrb_undef_p(dom_parser))
     dom_parser = mrb_obj_new(mrb, mrb_class_get_under_id(mrb, mrb_class_ptr(self), MRB_SYM(DomParser)), 0, NULL);
+  mrb_gc_protect(mrb, dom_parser);
   dom::parser *parser = mrb_cpp_get<dom::parser>(mrb, dom_parser);
   auto result = parser->parse(res.value());
   if (unlikely(result.error() != SUCCESS)) raise_simdjson_error(mrb, result.error());
