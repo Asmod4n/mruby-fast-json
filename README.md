@@ -1,5 +1,5 @@
 # **mruby‑fast‑json**
-A high‑performance JSON parser and encoder for MRuby, powered by Powered by [simdjson](https://github.com/simdjson/simdjson)
+A high‑performance JSON parser and encoder for MRuby, powered by [simdjson](https://github.com/simdjson/simdjson)
 Learn more at https://simdjson.org
 
 
