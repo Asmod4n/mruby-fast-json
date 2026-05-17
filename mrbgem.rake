@@ -28,7 +28,6 @@ MRuby::Gem::Specification.new('mruby-fast-json') do |spec|
   spec.add_dependency 'mruby-c-ext-helpers'
   spec.add_dependency 'mruby-chrono'
   spec.add_dependency 'mruby-native-ext-type', :github => 'Asmod4n/mruby-native-ext-type', branch: "main"
-  spec.add_dependency 'mruby-benchmark' , :github => 'Asmod4n/mruby-benchmark', branch: "main"
   spec.add_test_dependency 'mruby-io'
   spec.cc.defines  << 'MRB_USE_BIGINT'
   spec.cxx.defines << 'MRB_USE_BIGINT'
