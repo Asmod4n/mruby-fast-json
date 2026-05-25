@@ -50,6 +50,12 @@ static padded_string_view
 simdjson_safe_view_from_mrb_string(mrb_state *mrb, mrb_value str,
                                    padded_string &jsonbuffer) {
   mrb_int len = RSTRING_LEN(str);
+  struct RString* rs = mrb_str_ptr(str);
+  if (RSTR_SHARED_P(rs) || RSTR_FSHARED_P(rs)) {
+    mrb_str_modify(mrb, rs);
+    jsonbuffer = padded_string(RSTRING_PTR(str), len);
+    return jsonbuffer;
+  }
   if (mrb_test(mrb_iv_get(mrb, mrb_obj_value(mrb_module_get_id(mrb, MRB_SYM(JSON))), MRB_IVSYM(zero_copy_parsing)))) {
     if (likely(!need_allocation(RSTRING_PTR(str), len, RSTRING_CAPA(str)))) {
       str = mrb_obj_freeze(mrb, str);
