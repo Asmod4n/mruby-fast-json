@@ -691,22 +691,26 @@ static mrb_value mrb_json_doc_at_path_with_wildcard(mrb_state* mrb, mrb_value se
   mrb_get_args(mrb, "S|&", &path_val, &block);
   auto *doc = mrb_json_doc_get(mrb, self);
   std::string_view json_path(RSTRING_PTR(path_val), RSTRING_LEN(path_val));
-  auto result = doc->at_path_with_wildcard(json_path);
-  auto code = result.error();
-  if (likely(code == SUCCESS)) {
-    auto values = result.value();
-    if (mrb_proc_p(block)) {
-      int arena = mrb_gc_arena_save(mrb);
-      for (auto v : values) { mrb_yield(mrb, block, convert_ondemand_value_to_mrb(mrb, v)); mrb_gc_arena_restore(mrb, arena); }
-      return self;
-    } else {
-      mrb_value ary = mrb_ary_new(mrb);
-      mrb_gc_protect(mrb, ary);
-      int arena = mrb_gc_arena_save(mrb);
-      for (auto v : values) { mrb_ary_push(mrb, ary, convert_ondemand_value_to_mrb(mrb, v)); mrb_gc_arena_restore(mrb, arena); }
-      return ary;
-    }
+  // simdjson 4.6: On Demand hands the matches over ONE AT A TIME, through
+  // a callback, and no longer as a vector. It cannot be a vector here: an
+  // On Demand value is a position in the document, and the next match has
+  // already moved past the one before it. The two shapes this method
+  // offers are unchanged - a block sees each match, and without one they
+  // are collected.
+  mrb_value ary = mrb_nil_value();
+  const bool to_block = mrb_proc_p(block);
+  if (!to_block) {
+    ary = mrb_ary_new(mrb);
+    mrb_gc_protect(mrb, ary);
   }
+  const int arena = mrb_gc_arena_save(mrb);
+  auto code = doc->for_each_at_path_with_wildcard(json_path, [&](ondemand::value v) {
+    const mrb_value converted = convert_ondemand_value_to_mrb(mrb, v);
+    if (to_block) mrb_yield(mrb, block, converted);
+    else mrb_ary_push(mrb, ary, converted);
+    mrb_gc_arena_restore(mrb, arena);
+  });
+  if (likely(code == SUCCESS)) return to_block ? self : ary;
   if (is_lookup_miss(code)) return mrb_nil_value();
   raise_simdjson_error(mrb, code);
   return mrb_undef_value();
